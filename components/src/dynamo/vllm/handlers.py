@@ -3435,12 +3435,11 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                     )
         else:
             if self._custom_encoder is not None and has_mm_data:
-                # Aggregated CustomEncoder path takes precedence: when an encoder
-                # is configured it owns the image path, so don't attempt the
-                # NIXL/SHM pre-render receive (which would otherwise silently
-                # win). The encoder runs in-process (no NIXL transfer) and
-                # assembles a mixed EmbedsPrompt, or yields an error; pre_rendered
-                # stays None. A request with no images is treated as text-only.
+                # A configured CustomEncoder owns the image path: it runs
+                # in-process (no NIXL transfer) and assembles a mixed EmbedsPrompt
+                # (or yields an error), so route here instead of the normal
+                # NIXL/SHM pre-render + HF processing below. Text-only requests
+                # (no image data) take that normal path.
                 (
                     mixed_embeds,
                     multi_modal_data,
