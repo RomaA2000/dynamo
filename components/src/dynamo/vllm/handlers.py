@@ -3361,7 +3361,6 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         request: Dict[str, Any],
         request_id: str,
         context,
-        mm_processor_kwargs: Dict[str, Any] | None = None,
     ) -> tuple[
         tuple[torch.Tensor, list[int], list[bool]] | None,
         Dict[str, Any] | None,
@@ -3372,8 +3371,8 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         The CustomEncoder consumes image URLs directly and emits embeds. Returns
         ``(mixed_embeds, multi_modal_data, error)``:
         - images present: ``(mixed_embeds, None, None)``,
-        - no image content: ``(None, multi_modal_data, None)`` — text-only request
-          loaded via the normal aggregated path,
+        - no image content: ``(None, None, None)`` — text-only request, nothing
+          to assemble or extract (non-image modalities are rejected above),
         - failure: ``(None, None, error_dict)`` for the caller to yield.
         """
         # Internal invariant: callers guard on `self._custom_encoder is not None`
@@ -3412,11 +3411,10 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             return None, None, {"finish_reason": f"error: {msg}", "token_ids": []}
 
         if not image_urls:
-            # No image content at all → normal aggregated load (text-only).
-            multi_modal_data = await self._extract_multimodal_data(
-                request, request_id, context, mm_processor_kwargs=mm_processor_kwargs
-            )
-            return None, multi_modal_data, None
+            # No usable image URLs, and non-image modalities were already
+            # rejected above, so there is nothing for the CustomEncoder to
+            # assemble and nothing to extract → text-only request.
+            return None, None, None
 
         token_ids: list[int] = request.get("token_ids") or []
         # encode() is user-supplied code (any exception) and
@@ -3537,7 +3535,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                     multi_modal_data,
                     assemble_error,
                 ) = await self._assemble_custom_encoder_prompt(
-                    request, request_id, context, mm_processor_kwargs
+                    request, request_id, context
                 )
                 if assemble_error is not None:
                     yield assemble_error
