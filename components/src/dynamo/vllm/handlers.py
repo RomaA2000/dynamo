@@ -5,7 +5,6 @@ import asyncio
 import base64
 import inspect
 import logging
-import math
 import os
 
 # MM kwargs NIXL transfer (frontend → backend pre-rendered path)
@@ -102,12 +101,8 @@ from .args import Config
 from .constants import DisaggregationMode, EmbeddingTransferMode
 from .engine_monitor import VllmEngineMonitor
 from .engine_generate import (
-    build_prompt as _build_engine_generate_prompt,
-    build_sampling_params as _build_engine_generate_sampling_params,
+    EngineGenerateRequest,
     merge_kv_transfer_params as _merge_kv_transfer_params,
-    payload as _engine_generate_payload,
-    priority as _engine_generate_priority,
-    serialize_routed_experts as _serialize_routed_experts_vllm,
 )
 from .multimodal_utils.hash_utils import compute_mm_uuids_from_images
 from .multimodal_utils.model import (
@@ -120,6 +115,14 @@ from .multimodal_utils.models.qwen import (
     load_qwen_grid_params,
 )
 from .multimodal_utils.prefill_worker_utils import MultiModalEmbeddingLoader
+from .response_adapters import (
+    GenerationResponseContext,
+    LegacyResponseAdapter,
+    ResponseAdapter,
+    build_completion_usage as _build_completion_usage,
+    finite_logprob as _finite_logprob,
+    serialize_prompt_logprobs as _serialize_prompt_logprobs,
+)
 
 # Multimodal data dictionary keys
 IMAGE_URL_KEY: Final = "image_url"
@@ -501,93 +504,6 @@ def _placeholder_range_from_extra_arg(value: Any) -> PlaceholderRange:
     return PlaceholderRange(offset=offset, length=length)
 
 
-# Helpers for nvext response fields requested through `nvext.extra_fields`.
-
-
-# Logprobs can be -inf (log of probability 0) for masked/disallowed tokens (e.g.
-# via bad_words_token_ids / allowed_token_ids) or full-vocab prompt logprobs.
-# JSON has no inf/nan, so pythonize -> serde_json rewrites them to `null`, which
-# then fails typed deserialization on the Rust side and SILENTLY DROPS the whole
-# logprobs payload. Clamp non-finite logprobs to a large finite-negative
-# sentinel so the value survives transport while still meaning "effectively
-# impossible".
-_MIN_FINITE_LOGPROB = -1e30
-
-
-def _finite_logprob(value: Any) -> float:
-    lp = float(value)
-    return lp if math.isfinite(lp) else _MIN_FINITE_LOGPROB
-
-
-def _serialize_prompt_logprobs(
-    raw_prompt_logprobs: list,
-) -> list:
-    """Convert vLLM's ``RequestOutput.prompt_logprobs`` into the dict shape
-    expected by Dynamo's Rust ``PromptLogprobEntry`` (serde deserialization).
-
-    vLLM shape: ``list[dict[int, Logprob] | None]`` where ``Logprob`` has
-    ``.logprob``, ``.rank``, ``.decoded_token`` attributes.
-
-    Output shape: ``list[dict[str, {"logprob": float, ...}] | None]``.
-    Workers carry it under ``engine_data.prompt_logprobs`` so the Rust
-    postprocessor can surface it on ``NvExtResponse.prompt_logprobs`` without
-    changing the public ``LLMEngineOutput`` struct shape.
-
-    NOTE: token_id keys are emitted as **strings** (not ints) so that
-    pythonize → serde → JSON survives the worker→frontend transport. JSON
-    object keys are required to be strings; ``HashMap<u32, _>`` on the Rust
-    side deserializes string keys via ``u32::from_str``. Emitting int keys
-    here causes the chunk to be silently dropped on pythonize → JSON, which
-    surfaces as ``"Stream ended before generation completed"`` on the
-    frontend (worker emits cleanly, frontend never sees ``complete_final``).
-    """
-    result: list = []
-    for entry in raw_prompt_logprobs:
-        if entry is None:
-            result.append(None)
-        else:
-            converted: Dict[str, Dict[str, Any]] = {}
-            for token_id, logprob_obj in entry.items():
-                try:
-                    key = str(int(token_id))
-                except (TypeError, ValueError):
-                    # vLLM only emits int token-id keys; skip a non-int key
-                    # rather than aborting the whole prompt_logprobs payload.
-                    continue
-                lp_dict: Dict[str, Any] = {
-                    "logprob": _finite_logprob(logprob_obj.logprob),
-                }
-                rank = getattr(logprob_obj, "rank", None)
-                if rank is not None:
-                    lp_dict["rank"] = int(rank)
-                decoded = getattr(logprob_obj, "decoded_token", None)
-                if decoded is not None:
-                    lp_dict["decoded_token"] = decoded
-                converted[key] = lp_dict
-            result.append(converted)
-    return result
-
-
-def _attach_prompt_logprobs_engine_data(
-    tok: Dict[str, Any], prompt_logprobs: list
-) -> None:
-    engine_data = tok.setdefault("engine_data", {})
-    if isinstance(engine_data, dict):
-        engine_data["prompt_logprobs"] = prompt_logprobs
-
-
-def _attach_routed_experts_engine_data(
-    tok: Dict[str, Any], routed_experts: Dict[str, Any]
-) -> None:
-    # routed_experts rides the engine's opaque engine_data passthrough (surfaced
-    # by the Rust postprocessor as nvext.routed_experts); disaggregated_params
-    # stays KV-transfer only. Merge via setdefault so we don't clobber any
-    # prompt_logprobs already attached to engine_data on the final chunk.
-    engine_data = tok.setdefault("engine_data", {})
-    if isinstance(engine_data, dict):
-        engine_data["routed_experts"] = routed_experts
-
-
 def _iter_nvext_sources(request: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
     """Yield each nvext dict on the request, in priority order:
 
@@ -752,35 +668,6 @@ def _accumulate_engine_data(
     tok["engine_data"] = engine_data
 
 
-def _serialize_routed_experts(
-    routed_experts: Any, start: int = 0
-) -> Optional[Dict[str, Any]]:
-    if routed_experts is None:
-        return None
-
-    shape = getattr(routed_experts, "shape", None)
-    tobytes = getattr(routed_experts, "tobytes", None)
-    if shape is None or not callable(tobytes):
-        logger.warning(
-            "Unable to serialize routed_experts of type %s",
-            type(routed_experts).__name__,
-        )
-        return None
-
-    return {
-        # base64, matching vLLM-native encoding.
-        "data": base64.b64encode(tobytes()).decode("ascii"),
-        "shape": [int(dim) for dim in shape],
-        # Row offset of the first returned routing entry within the full
-        # sequence (= SamplingParams.routed_experts_prompt_start; vLLM trims the
-        # leading prompt rows). Lets the RL consumer align the completion.
-        "start": int(start),
-        # Encode dtype so the consumer decodes the raw bytes with the right
-        # element type instead of assuming a fixed width.
-        "dtype": str(getattr(routed_experts, "dtype", "")),
-    }
-
-
 def build_sampling_params(
     request: Dict[str, Any],
     default_sampling_params: Dict[str, Any],
@@ -806,10 +693,9 @@ def build_sampling_params(
     keep generation_config defaults for Gateway/backward-compatible traffic.
     Stop-token defaults from the model config are still applied later.
     """
-    if _engine_generate_payload(request) is not None:
-        return _build_engine_generate_sampling_params(
-            request, default_sampling_params, model_max_len
-        )
+    engine_request = EngineGenerateRequest.from_request(request)
+    if engine_request is not None:
+        return engine_request.build_sampling_params(default_sampling_params, model_max_len)
 
     if enable_rl and _is_token_in_request(request):
         # Use vLLM defaults without model generation_config overlays.
@@ -2984,49 +2870,11 @@ class BaseWorkerHandler(ABC, Generic[RequestT, ResponseT]):
         embedding_sequence_length: int | None = None,
         completion_token_counts: dict[int, int] | None = None,
     ) -> Dict[str, Any]:
-        """
-        Build completion usage statistics.
-
-        Args:
-            request_output: vLLM RequestOutput object
-            embedding_sequence_length: If using prompt embeddings, the sequence length
-                                     extracted from the embeddings tensor shape
-            completion_token_counts: Optional cumulative generated-token counts by
-                                     output index. DELTA-mode streams need this
-                                     because the final vLLM chunk is not cumulative.
-
-        Returns:
-            Dict with prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details
-        """
-        # Determine prompt token count:
-        # - For embeddings: use embedding_sequence_length from tensor shape
-        # - For normal text: use len(prompt_token_ids)
-        if embedding_sequence_length is not None:
-            prompt_tokens = embedding_sequence_length
-        elif request_output.prompt_token_ids:
-            prompt_tokens = len(request_output.prompt_token_ids)
-        else:
-            prompt_tokens = None
-
-        if completion_token_counts is not None:
-            completion_tokens = sum(completion_token_counts.values())
-        else:
-            completion_tokens = sum(
-                len(output.token_ids) for output in request_output.outputs
-            )
-
-        return {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": (
-                prompt_tokens + completion_tokens if prompt_tokens is not None else None
-            ),
-            "prompt_tokens_details": (
-                {"cached_tokens": num_cached}
-                if (num_cached := getattr(request_output, "num_cached_tokens", None))
-                else None
-            ),
-        }
+        return _build_completion_usage(
+            request_output,
+            embedding_sequence_length,
+            completion_token_counts,
+        )
 
     @staticmethod
     def _extract_logprobs(
@@ -3087,7 +2935,7 @@ class BaseWorkerHandler(ABC, Generic[RequestT, ResponseT]):
         priority=0,
         reasoning_ended=None,
         reasoning_parser_kwargs=None,
-        engine_generate: bool = False,
+        response_adapter: ResponseAdapter = LegacyResponseAdapter(),
     ):
         try:
             # Log LoRA usage for this generation (debug level to avoid log spam)
@@ -3190,63 +3038,25 @@ class BaseWorkerHandler(ABC, Generic[RequestT, ResponseT]):
                     if top_logprobs is not None:
                         out["top_logprobs"] = top_logprobs
 
-                    if engine_generate:
-                        out[
-                            "completion_usage"
-                        ] = BaseWorkerHandler._build_completion_usage(
-                            request_output=res,
-                            embedding_sequence_length=embedding_sequence_length,
-                            completion_token_counts=total_output_tokens_by_index,
-                        )
-
                     if finish_reason:
                         out["finish_reason"] = normalize_finish_reason(finish_reason)
-                        if not engine_generate:
-                            out[
-                                "completion_usage"
-                            ] = BaseWorkerHandler._build_completion_usage(
-                                request_output=res,
-                                embedding_sequence_length=embedding_sequence_length,
-                                completion_token_counts=total_output_tokens_by_index,
-                            )
-                        if engine_generate:
-                            metadata: Dict[str, Any] = {}
-                            if prompt_logprobs_payload is not None:
-                                metadata["prompt_logprobs"] = prompt_logprobs_payload
-                            routed_experts_vllm = _serialize_routed_experts_vllm(
-                                raw_routed_experts_by_output.get(output_idx)
-                            )
-                            if routed_experts_vllm is not None:
-                                metadata["routed_experts"] = routed_experts_vllm
-                            if kv_transfer_params is not None:
-                                metadata["kv_transfer_params"] = kv_transfer_params
-                            if metadata:
-                                out["generate_metadata"] = metadata
-                        else:
-                            if prompt_logprobs_payload is not None:
-                                _attach_prompt_logprobs_engine_data(
-                                    out, prompt_logprobs_payload
-                                )
-                            # Emit the effective trim offset for the nvext
-                            # routed-expert representation.
-                            raw_start = int(
-                                getattr(
-                                    sampling_params,
-                                    "routed_experts_prompt_start",
-                                    0,
-                                )
-                                or 0
-                            )
-                            prompt_len = len(
-                                getattr(res, "prompt_token_ids", None) or []
-                            )
-                            effective_start = min(raw_start, prompt_len)
-                            routed_experts = _serialize_routed_experts(
-                                raw_routed_experts_by_output.get(output_idx),
-                                start=effective_start,
-                            )
-                            if routed_experts is not None:
-                                _attach_routed_experts_engine_data(out, routed_experts)
+
+                    response_adapter.adapt(
+                        out,
+                        GenerationResponseContext(
+                            request_output=res,
+                            output_index=output_idx,
+                            finished=bool(finish_reason),
+                            sampling_params=sampling_params,
+                            embedding_sequence_length=embedding_sequence_length,
+                            completion_token_counts=total_output_tokens_by_index,
+                            prompt_logprobs=prompt_logprobs_payload,
+                            routed_experts=raw_routed_experts_by_output.get(output_idx),
+                            kv_transfer_params=kv_transfer_params,
+                        ),
+                    )
+
+                    if finish_reason:
                         # Log completion with LoRA info (debug level to avoid log spam)
                         self._log_with_lora_context(
                             "Completed token generation for request {request_id}{lora_info}: "
@@ -3323,6 +3133,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
 
     async def _generate_token_mode(self, request, context, request_id):
         """Generate tokens using internal protocol format (token-in-token-out)."""
+        engine_request = EngineGenerateRequest.from_request(request)
         # Firstly extract disaggregated params from prefill result if available
         prefill_result = request.get("prefill_result")
         if prefill_result and isinstance(prefill_result, dict):
@@ -3445,18 +3256,22 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             yield error
             return
 
-        if _engine_generate_payload(request) is not None:
-            prompt = _build_engine_generate_prompt(request)
+        if engine_request is not None:
+            prompt = engine_request.build_prompt()
             embedding_sequence_length = None
 
         _apply_nvext_cache_salt(request, prompt)
 
         # Build sampling params from request
-        sampling_params = build_sampling_params(
-            request,
-            self.default_sampling_params,
-            self.model_max_len,
-            enable_rl=self.config.enable_rl,
+        sampling_params = (
+            engine_request.build_sampling_params(self.default_sampling_params, self.model_max_len)
+            if engine_request is not None
+            else build_sampling_params(
+                request,
+                self.default_sampling_params,
+                self.model_max_len,
+                enable_rl=self.config.enable_rl,
+            )
         )
 
         if kv_params is not None:
@@ -3485,7 +3300,11 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             )
         routing = request.get("routing") or {}
         dp_rank = self._to_local_dp_rank(routing.get("dp_rank"))
-        priority = _engine_generate_priority(request, routing)
+        priority = (
+            engine_request.priority(routing)
+            if engine_request is not None
+            else -int(routing.get("priority", 0))
+        )
 
         trace_headers = context.trace_headers()
         reasoning_ended, reasoning_parser_kwargs = _request_reasoning_metadata(request)
@@ -3538,7 +3357,11 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                         priority=priority,
                         reasoning_ended=reasoning_ended,
                         reasoning_parser_kwargs=reasoning_parser_kwargs,
-                        engine_generate=_engine_generate_payload(request) is not None,
+                        response_adapter=(
+                            engine_request.response_adapter()
+                            if engine_request is not None
+                            else LegacyResponseAdapter()
+                        ),
                     ):
                         if abort_guard is not None:
                             abort_guard.signal_first_token()
@@ -3729,6 +3552,7 @@ class PrefillWorkerHandler(BaseWorkerHandler):
 
     async def _generate_token_mode(self, request, context, request_id):
         """Generate prefill using internal protocol format (token-in-token-out)."""
+        engine_request = EngineGenerateRequest.from_request(request)
         # TODO: Wire up NIXL mm_kwargs passthrough for disaggregated prefill
         # (similar to DecodeWorkerHandler). For now, prefill
         # always downloads and processes images via the standard path.
@@ -3756,18 +3580,22 @@ class PrefillWorkerHandler(BaseWorkerHandler):
             yield error
             return
 
-        if _engine_generate_payload(request) is not None:
-            prompt = _build_engine_generate_prompt(request)
+        if engine_request is not None:
+            prompt = engine_request.build_prompt()
             embedding_sequence_length = None
 
         _apply_nvext_cache_salt(request, prompt)
 
         # Build sampling params from request using shared utility
-        sampling_params = build_sampling_params(
-            request,
-            self.default_sampling_params,
-            self.model_max_len,
-            enable_rl=self.config.enable_rl,
+        sampling_params = (
+            engine_request.build_sampling_params(self.default_sampling_params, self.model_max_len)
+            if engine_request is not None
+            else build_sampling_params(
+                request,
+                self.default_sampling_params,
+                self.model_max_len,
+                enable_rl=self.config.enable_rl,
+            )
         )
 
         # One protocol instance per request; carries per-request state
@@ -3800,7 +3628,11 @@ class PrefillWorkerHandler(BaseWorkerHandler):
 
         routing = request.get("routing") or {}
         dp_rank = self._to_local_dp_rank(routing.get("dp_rank"))
-        priority = _engine_generate_priority(request, routing)
+        priority = (
+            engine_request.priority(routing)
+            if engine_request is not None
+            else -int(routing.get("priority", 0))
+        )
 
         trace_headers = context.trace_headers()
         reasoning_ended, reasoning_parser_kwargs = _request_reasoning_metadata(request)
