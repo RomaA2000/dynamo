@@ -1847,6 +1847,18 @@ async fn chat_completions(
         ),
     );
 
+    // for a Nemotron force-reasoning parser requested with
+    // force_nonempty_content=true, surface reasoning as content when a
+    // non-streaming turn produced no content (handled in the aggregator; the
+    // streaming path keeps reasoning parsing disabled in the preprocessor).
+    let move_reasoning_to_content_when_empty =
+        crate::preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
+            parsing_options.reasoning_parser.as_deref(),
+            request.chat_template_args.as_ref(),
+        );
+    let parsing_options = parsing_options
+        .with_move_reasoning_to_content_when_empty(move_reasoning_to_content_when_empty);
+
     let mut response_collector = state
         .metrics_clone()
         .create_response_collector(&metric_model);
@@ -2325,6 +2337,18 @@ async fn responses(
             request.inner.tool_choice.as_ref(),
         ),
     );
+
+    // for a Nemotron force-reasoning parser requested with
+    // force_nonempty_content=true, surface reasoning as content when a
+    // non-streaming turn produced no content (handled in the aggregator; the
+    // streaming path keeps reasoning parsing disabled in the preprocessor).
+    let move_reasoning_to_content_when_empty =
+        crate::preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
+            parsing_options.reasoning_parser.as_deref(),
+            request.chat_template_args.as_ref(),
+        );
+    let parsing_options = parsing_options
+        .with_move_reasoning_to_content_when_empty(move_reasoning_to_content_when_empty);
 
     let mut response_collector = state
         .metrics_clone()
