@@ -13,6 +13,7 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use anyhow::Context as _;
 use dashmap::{DashMap, DashSet};
+use dynamo_http_server::metrics::Metrics;
 use dynamo_kv_router::PrefillLoadEstimator;
 use futures::StreamExt;
 
@@ -35,7 +36,6 @@ use crate::{
     backend::Backend,
     discovery::{KvWorkerMonitor, WORKER_TYPE_DECODE, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback, RouterConfig},
-    http::service::metrics::Metrics,
     kv_router::PrefillRouter,
     local_model::runtime_config::TokenizerBackend,
     model_card::ModelDeploymentCard,
