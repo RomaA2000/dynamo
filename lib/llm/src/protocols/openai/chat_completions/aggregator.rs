@@ -435,7 +435,11 @@ impl DeltaAggregator {
                     .tool_calls
                     .as_ref()
                     .is_some_and(|calls| !calls.is_empty());
+                // `content_parts` (multimodal) counts as content too — `From<DeltaChoice>`
+                // prefers parts over `text`, so moving reasoning into `text` here would be
+                // dropped. Only move when there is no content of either kind.
                 if choice.text.is_empty()
+                    && choice.content_parts.is_empty()
                     && !has_tool_calls
                     && choice
                         .reasoning_content
@@ -757,6 +761,66 @@ mod tests {
             &ChatCompletionMessageContent::Text("The answer is 42.".to_string()),
         );
         assert_eq!(msg.reasoning_content.as_deref(), Some("Let me think."));
+    }
+
+    /// Multimodal content lives in `content_parts`, and `From<DeltaChoice>` prefers
+    /// parts over `text` — so reasoning must NOT be moved when parts are present
+    /// (it would be silently dropped). Guards the `content_parts` half of the
+    /// no-content check.
+    #[tokio::test]
+    async fn test_move_reasoning_skips_when_content_parts_present() {
+        #[allow(deprecated)]
+        let delta = dynamo_protocols::types::ChatCompletionStreamResponseDelta {
+            content: Some(ChatCompletionMessageContent::Parts(vec![
+                dynamo_protocols::types::ChatCompletionResponseContentPart::Text(
+                    dynamo_protocols::types::ChatCompletionResponseContentPartText {
+                        text: "an image".to_string(),
+                    },
+                ),
+            ])),
+            function_call: None,
+            tool_calls: None,
+            role: Some(dynamo_protocols::types::Role::Assistant),
+            refusal: None,
+            reasoning_content: Some("thinking".to_string()),
+        };
+        let choice = dynamo_protocols::types::ChatChoiceStream {
+            index: 0,
+            delta,
+            finish_reason: Some(dynamo_protocols::types::FinishReason::Stop),
+            logprobs: None,
+        };
+        let data = NvCreateChatCompletionStreamResponse {
+            inner: dynamo_protocols::types::CreateChatCompletionStreamResponse {
+                id: "test_id".to_string(),
+                model: "m".to_string(),
+                created: 1,
+                service_tier: None,
+                usage: None,
+                system_fingerprint: None,
+                choices: vec![choice],
+                object: "chat.completion".to_string(),
+            },
+            nvext: None,
+            llm_metrics: None,
+        };
+        let annotated = Annotated {
+            data: Some(data),
+            id: Some("test_id".to_string()),
+            event: None,
+            comment: None,
+            error: None,
+        };
+        let opts = ParsingOptions::default().with_move_reasoning_to_content_when_empty(true);
+        let resp = DeltaAggregator::apply(Box::pin(stream::iter(vec![annotated])), opts)
+            .await
+            .unwrap();
+        let msg = &resp.inner.choices[0].message;
+        assert!(matches!(
+            msg.content.as_ref().unwrap(),
+            ChatCompletionMessageContent::Parts(_)
+        ));
+        assert_eq!(msg.reasoning_content.as_deref(), Some("thinking"));
     }
 
     /// Build a stream delta carrying a raw list of tool-call chunks (no content).

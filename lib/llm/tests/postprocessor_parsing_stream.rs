@@ -124,7 +124,7 @@ async fn postprocessor_parsing_stream_replays_unit_test_fixture() {
 
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -180,7 +180,7 @@ async fn postprocessor_parsing_stream_replays_interval_20_fixture() {
 
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -470,7 +470,7 @@ async fn postprocessor_parsing_stream_deepseek_v4_tool_continuation_keeps_inject
 
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -540,7 +540,7 @@ async fn postprocessor_parsing_stream_kimi_k25_tool_continuation_suppresses_inje
 
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -587,7 +587,7 @@ async fn postprocessor_parsing_stream_nemotron_v3_enable_thinking_false_returns_
     let input_chunks = vec![mock_content_chunk("This is plain content")];
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -635,7 +635,7 @@ async fn postprocessor_parsing_stream_nemotron_v3_force_nonempty_strips_start_to
     ];
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -679,7 +679,7 @@ async fn postprocessor_parsing_stream_nemotron_v3_force_nonempty_flushes_partial
     let input_chunks = vec![mock_content_chunk("<thi"), mock_final_chunk()];
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -727,7 +727,7 @@ async fn postprocessor_parsing_stream_nemotron_v3_force_nonempty_flushes_partial
     let input_chunks = vec![mock_content_chunk("<thi")];
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -779,7 +779,7 @@ async fn postprocessor_parsing_stream_nemotron_v3_force_nonempty_tracks_prefix_p
     ];
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -848,7 +848,7 @@ async fn postprocessor_parsing_stream_minimax_required_bypasses_reasoning() {
 
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -964,7 +964,13 @@ async fn postprocessor_parsing_stream_nemotron_required_smoke_case() {
 
         let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
         let output_stream = preprocessor
-            .postprocessor_parsing_stream(input_stream, &request, prompt_injected_reasoning, false)
+            .postprocessor_parsing_stream(
+                input_stream,
+                &request,
+                prompt_injected_reasoning,
+                false,
+                true,
+            )
             .expect("postprocessor_parsing_stream should build");
 
         let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -1065,7 +1071,7 @@ async fn postprocessor_parsing_stream_minimax_named_bypasses_reasoning() {
 
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -1149,7 +1155,7 @@ async fn postprocessor_parsing_stream_minimax_named_bare_parameters() {
 
     let input_stream = stream::iter(input_chunks.into_iter().map(Annotated::from_data));
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
 
     let output_chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> =
@@ -1339,7 +1345,7 @@ async fn tool_choice_matrix_force_reasoning_required_bare_json() {
                 .map(Annotated::from_data),
         );
         let output_stream = preprocessor
-            .postprocessor_parsing_stream(input_stream, &request, prompt_injected, false)
+            .postprocessor_parsing_stream(input_stream, &request, prompt_injected, false, true)
             .expect("postprocessor_parsing_stream should build");
         let DrainOutput {
             reasoning,
@@ -1380,7 +1386,7 @@ async fn tool_choice_matrix_force_reasoning_named_bare_json() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1410,7 +1416,7 @@ async fn tool_choice_matrix_non_force_required_no_injection_bare_json() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1441,7 +1447,7 @@ async fn tool_choice_matrix_non_force_required_prompt_injected_with_close_marker
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1483,7 +1489,7 @@ async fn tool_choice_matrix_non_force_required_prompt_injected_bare_json_contrac
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1524,7 +1530,7 @@ async fn tool_choice_deepseek_v4_required_prompt_injected_bare_json_recovers() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1561,7 +1567,7 @@ async fn tool_choice_minimax_m3_required_prompt_injected_bare_json_recovers() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1601,7 +1607,7 @@ async fn tool_calls_qwen3_coder_auto_routes_through_experimental_gate() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         content,
@@ -1645,7 +1651,7 @@ async fn tool_choice_prompt_injected_close_marker_json_keeps_reasoning_parser_fo
                 .map(Annotated::from_data),
         );
         let output_stream = preprocessor
-            .postprocessor_parsing_stream(input_stream, &request, true, false)
+            .postprocessor_parsing_stream(input_stream, &request, true, false, true)
             .expect("postprocessor_parsing_stream should build");
         let DrainOutput {
             reasoning,
@@ -1683,7 +1689,7 @@ async fn tool_choice_deepseek_v4_named_prompt_injected_bare_params_recovers() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1719,7 +1725,7 @@ async fn tool_choice_minimax_m3_named_prompt_injected_bare_params_recovers() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1755,7 +1761,7 @@ async fn tool_choice_glm45_required_prompt_injected_bare_json_recovers() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1791,7 +1797,7 @@ async fn tool_choice_glm45_named_prompt_injected_bare_params_recovers() {
             .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, true, false)
+        .postprocessor_parsing_stream(input_stream, &request, true, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
@@ -1847,7 +1853,7 @@ async fn tool_choice_structural_tag_keeps_prompt_injected_reasoning_parser() {
                 .map(Annotated::from_data),
         );
         let output_stream = preprocessor
-            .postprocessor_parsing_stream(input_stream, &request, true, true)
+            .postprocessor_parsing_stream(input_stream, &request, true, true, true)
             .expect("postprocessor_parsing_stream should build");
         let DrainOutput {
             reasoning,
@@ -1895,7 +1901,7 @@ async fn tool_choice_matrix_immediate_jail_reasoning_only_first_chunk() {
         .map(Annotated::from_data),
     );
     let output_stream = preprocessor
-        .postprocessor_parsing_stream(input_stream, &request, false, false)
+        .postprocessor_parsing_stream(input_stream, &request, false, false, true)
         .expect("postprocessor_parsing_stream should build");
     let DrainOutput {
         reasoning,
