@@ -488,9 +488,16 @@ where
         Ok(())
     }
 
-    /// Release request state and abort any active admission lifecycle.
+    /// Legacy slot cleanup. Admission-managed requests should use [`Self::finish`].
     pub async fn free(&self, request_id: &str) -> Result<(), SequenceError> {
-        self.finish(request_id, RequestOutcome::Aborted).await
+        let request_id = request_id.to_string();
+        let worker = self.slots.request_worker(&request_id);
+        self.slots.free(&request_id, Instant::now())?;
+        match worker {
+            Some(worker) => self.queue.update_worker(worker).await,
+            None => self.queue.update().await,
+        }
+        Ok(())
     }
 
     pub async fn mark_dispatched(&self, request_id: &str) {
@@ -1431,7 +1438,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn free_aborts_admission_once() {
+    async fn finish_aborts_admission_once() {
         let workers = HashMap::from([(0, SimpleWorkerConfig::default())]);
         let slots = Arc::new(ActiveSequencesMultiWorker::new(
             NoopSequencePublisher,
@@ -1472,8 +1479,14 @@ mod tests {
             .await
             .unwrap();
 
-        scheduler.free("req-1").await.unwrap();
-        scheduler.free("req-1").await.unwrap();
+        scheduler
+            .finish("req-1", RequestOutcome::Aborted)
+            .await
+            .unwrap();
+        scheduler
+            .finish("req-1", RequestOutcome::Aborted)
+            .await
+            .unwrap();
 
         assert_eq!(aborted.load(Ordering::Relaxed), 1);
         cancel_token.cancel();

@@ -805,7 +805,7 @@ where
         self.scheduler.mark_dispatched(request_id).await;
     }
 
-    /// Release request state and abort any active admission lifecycle.
+    /// Legacy slot cleanup. Admission-managed requests should use [`Self::finish`].
     pub async fn free(&self, request_id: &str) -> Result<(), SequenceError> {
         self.scheduler.free(request_id).await
     }
