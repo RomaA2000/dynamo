@@ -23,6 +23,7 @@ use crate::{
     kv_router::{KvRouter, metrics::RouterRequestMetrics},
     preprocessor::PreprocessedRequest,
     protocols::common::{
+        FinishReason,
         llm_backend::LLMEngineOutput,
         timing::{RequestPhase, RoutingData},
     },
@@ -377,7 +378,7 @@ impl KvPushRouter {
                         let Some(item) = item else {
                             break true;
                         };
-                        failed |= item.error.is_some() || item.event.as_deref() == Some("error");
+                        failed |= response_item_failed(&item);
                         guard.on_item(&item).await;
                         yield item;
                     }
@@ -627,6 +628,18 @@ impl DirectRoutingRouter {
     }
 }
 
+fn response_item_failed(item: &Annotated<LLMEngineOutput>) -> bool {
+    item.error.is_some()
+        || item.event.as_deref() == Some("error")
+        || item
+            .data
+            .as_ref()
+            .and_then(|data| data.finish_reason.as_ref())
+            .is_some_and(|reason| {
+                matches!(reason, FinishReason::Error(_) | FinishReason::Cancelled)
+            })
+}
+
 #[async_trait]
 impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>, Error>
     for DirectRoutingRouter
@@ -671,6 +684,21 @@ mod tests {
             .output_options(Default::default())
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn response_item_failed_includes_typed_terminal_failures() {
+        let mut output = LLMEngineOutput::default();
+        assert!(!response_item_failed(&Annotated::from_data(output.clone())));
+
+        output.finish_reason = Some(FinishReason::Error("decode failed".to_string()));
+        assert!(response_item_failed(&Annotated::from_data(output.clone())));
+
+        output.finish_reason = Some(FinishReason::Cancelled);
+        assert!(response_item_failed(&Annotated::from_data(output.clone())));
+
+        output.finish_reason = Some(FinishReason::Length);
+        assert!(!response_item_failed(&Annotated::from_data(output)));
     }
 
     async fn router(session_affinity_ttl: Option<Duration>) -> (KvPushRouter, Runtime) {
