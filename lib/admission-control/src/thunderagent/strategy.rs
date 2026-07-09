@@ -55,6 +55,7 @@ impl Default for Program {
 
 struct RequestState {
     session_id: String,
+    session_final: bool,
     context_tokens: usize,
     worker_eligibility: WorkerEligibility,
     dispatched: bool,
@@ -120,6 +121,7 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
             request.id(),
             RequestState {
                 session_id: session_id.clone(),
+                session_final: request.session_final(),
                 context_tokens: request.context_tokens(),
                 worker_eligibility: request.worker_eligibility().clone(),
                 dispatched: false,
@@ -153,6 +155,10 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
         };
         let context_tokens = request.context_tokens;
         let worker_eligibility = request.worker_eligibility.clone();
+        let session_final = request.session_final;
+        if session_final {
+            return self.begin_session_final(id, session_id, worker_eligibility);
+        }
         let capacities = self.capacity.snapshot();
         let capacity_known = !capacities.is_empty();
         let eligibility = worker_eligibility.snapshot();
@@ -244,6 +250,35 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
         }
     }
 
+    fn begin_session_final(
+        &mut self,
+        id: AdmissionId,
+        session_id: &str,
+        worker_eligibility: WorkerEligibility,
+    ) -> AdmissionDecision {
+        let assigned_worker = self
+            .programs
+            .get(session_id)
+            .and_then(|program| program.assigned_worker);
+        self.programs.shift_remove(session_id);
+        self.paused.shift_remove(session_id);
+        if let Some(request) = self.requests.get_mut(&id) {
+            request.prior = None;
+        }
+        self.sessions
+            .entry(session_id.to_owned())
+            .or_default()
+            .current = Some(id);
+        tracing::info!(%session_id, "ThunderAgent released program on session-final request");
+
+        if let Some(worker) = assigned_worker
+            && worker_eligibility.snapshot().structurally_allows(worker)
+        {
+            return AdmissionDecision::Ready(WorkerPlacement::Exact(worker));
+        }
+        AdmissionDecision::Ready(WorkerPlacement::Any)
+    }
+
     fn defer_request(
         &mut self,
         session_id: &str,
@@ -315,6 +350,11 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
         }
         if let Some(requests) = self.sessions.get_mut(&request.session_id) {
             requests.current = None;
+        }
+        if request.session_final {
+            self.programs.shift_remove(&request.session_id);
+            self.paused.shift_remove(&request.session_id);
+            return self.promote_next(&request.session_id);
         }
         if let Some(program) = self.programs.get_mut(&request.session_id) {
             program.deferred_since = None;
@@ -865,6 +905,21 @@ mod tests {
         AdmissionRequest::new(
             AdmissionId::new(id),
             session_id,
+            false,
+            context_tokens,
+            WorkerEligibility::new(|| WorkerEligibilitySnapshot::new([worker(1), worker(2)])),
+        )
+    }
+
+    fn final_request(
+        id: u64,
+        session_id: Option<&str>,
+        context_tokens: usize,
+    ) -> AdmissionRequest<'_> {
+        AdmissionRequest::new(
+            AdmissionId::new(id),
+            session_id,
+            true,
             context_tokens,
             WorkerEligibility::new(|| WorkerEligibilitySnapshot::new([worker(1), worker(2)])),
         )
@@ -879,6 +934,7 @@ mod tests {
         AdmissionRequest::new(
             AdmissionId::new(id),
             session_id,
+            false,
             context_tokens,
             WorkerEligibility::new(move || WorkerEligibilitySnapshot::new(eligible_workers())),
         )
@@ -893,6 +949,7 @@ mod tests {
         AdmissionRequest::new(
             AdmissionId::new(id),
             session_id,
+            false,
             context_tokens,
             WorkerEligibility::new(move || {
                 let (structural, available) = workers();
@@ -1133,6 +1190,41 @@ mod tests {
             context_tokens: 140,
         });
         assert_eq!(strategy.programs["a"].token_total, 140);
+    }
+
+    #[test]
+    fn session_final_releases_program_and_routes_normally() {
+        let mut strategy =
+            ThunderAgent::new(|| capacities(&[(1, 1_000)]), Default::default()).unwrap();
+        assert_eq!(
+            strategy.admit(request(1, Some("a"), 100)),
+            AdmissionDecision::Ready(WorkerPlacement::Exact(worker(1)))
+        );
+        strategy.on_event(AdmissionEvent::Dispatched {
+            id: AdmissionId::new(1),
+            worker: worker(1),
+        });
+        strategy.on_event(AdmissionEvent::Completed {
+            id: AdmissionId::new(1),
+            context_tokens: 140,
+        });
+
+        assert_eq!(
+            strategy.admit(final_request(2, Some("a"), 1)),
+            AdmissionDecision::Ready(WorkerPlacement::Exact(worker(1)))
+        );
+        assert!(!strategy.programs.contains_key("a"));
+        assert!(!strategy.paused.contains("a"));
+
+        strategy.on_event(AdmissionEvent::Dispatched {
+            id: AdmissionId::new(2),
+            worker: worker(1),
+        });
+        strategy.on_event(AdmissionEvent::Completed {
+            id: AdmissionId::new(2),
+            context_tokens: 1,
+        });
+        assert!(!strategy.programs.contains_key("a"));
     }
 
     #[test]

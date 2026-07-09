@@ -52,6 +52,7 @@ impl PolicyClassAdmissionController {
         &mut self,
         class_index: usize,
         session_id: Option<&str>,
+        session_final: bool,
         context_tokens: usize,
         worker_eligibility: WorkerEligibility,
     ) -> Option<(AdmissionTicket, AdmissionDecision)> {
@@ -62,6 +63,7 @@ impl PolicyClassAdmissionController {
         let decision = strategy.admit(AdmissionRequest::new(
             id,
             session_id,
+            session_final,
             context_tokens,
             worker_eligibility,
         ));

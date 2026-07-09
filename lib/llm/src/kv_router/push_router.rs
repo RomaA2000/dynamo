@@ -96,6 +96,10 @@ impl KvPushRouter {
             .agent_context
             .as_ref()
             .map(|context| context.session_id.clone());
+        let session_final = request
+            .agent_context
+            .as_ref()
+            .is_some_and(|context| context.session_final == Some(true));
         let routing_parts = RoutingRequestParts::new(request);
         let request_context = request.context().clone();
         let mut selection_future = Box::pin(async {
@@ -109,6 +113,7 @@ impl KvPushRouter {
                     affinity_worker,
                     policy_class,
                     session_id,
+                    session_final,
                 },
             )
             .instrument(tracing::info_span!("kv_router.select_worker"))

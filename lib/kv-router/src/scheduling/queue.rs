@@ -658,6 +658,7 @@ impl<
             self.admission.admit(
                 class_index,
                 request.session_id.as_deref(),
+                request.session_final,
                 request.isl_tokens,
                 worker_eligibility,
             )
@@ -1785,6 +1786,7 @@ mod tests {
             strict_priority: 0,
             policy_class: None,
             session_id: None,
+            session_final: false,
             expected_output_tokens: None,
             pinned_worker: None,
             allowed_worker_ids: None,

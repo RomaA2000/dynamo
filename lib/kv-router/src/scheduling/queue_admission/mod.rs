@@ -108,6 +108,7 @@ impl WorkerEligibilitySnapshot {
 pub struct AdmissionRequest<'a> {
     id: AdmissionId,
     session_id: Option<&'a str>,
+    session_final: bool,
     context_tokens: usize,
     worker_eligibility: WorkerEligibility,
 }
@@ -116,12 +117,14 @@ impl<'a> AdmissionRequest<'a> {
     pub fn new(
         id: AdmissionId,
         session_id: Option<&'a str>,
+        session_final: bool,
         context_tokens: usize,
         worker_eligibility: WorkerEligibility,
     ) -> Self {
         Self {
             id,
             session_id,
+            session_final,
             context_tokens,
             worker_eligibility,
         }
@@ -133,6 +136,10 @@ impl<'a> AdmissionRequest<'a> {
 
     pub fn session_id(&self) -> Option<&'a str> {
         self.session_id
+    }
+
+    pub fn session_final(&self) -> bool {
+        self.session_final
     }
 
     /// Full tokenized request context, not uncached prefill work.
@@ -256,6 +263,7 @@ mod tests {
             strategy.admit(AdmissionRequest::new(
                 AdmissionId::new(7),
                 Some("session"),
+                false,
                 42,
                 eligibility,
             )),

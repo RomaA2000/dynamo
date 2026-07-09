@@ -1857,6 +1857,7 @@ impl KvRouter {
                     strict_priority,
                     policy_class,
                     None,
+                    false,
                     None,
                     None,
                     None, // allowed_worker_ids: pass via RoutingHints in PreprocessedRequest path

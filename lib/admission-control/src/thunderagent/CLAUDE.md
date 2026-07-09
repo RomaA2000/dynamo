@@ -102,7 +102,7 @@ When a worker exceeds `pause_threshold * capacity`, ThunderAgent pauses the smal
 | Retention capacity | Static device KV plus native-offload capacity from worker configuration. |
 | Pack and fairness | New-session fairness, grouped resume, largest-first placement, smallest-Acting pause, deferred Reasoning pause, hysteresis, and timeout. |
 | Sticky placement | `WorkerPlacement::Exact` preserves the selected worker/rank across turns. |
-| Session close | Not implemented; session-final handling is intentionally deferred. |
+| Session close | `AdmissionRequest::session_final` releases program accounting while the small terminal request still routes normally. |
 
 ## Invariants
 
