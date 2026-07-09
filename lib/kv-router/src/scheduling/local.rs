@@ -485,21 +485,16 @@ where
         Ok(())
     }
 
+    /// Release request state and abort any active admission lifecycle.
     pub async fn free(&self, request_id: &str) -> Result<(), SequenceError> {
-        let request_id = request_id.to_string();
-        let worker = self.slots.request_worker(&request_id);
-        self.slots.free(&request_id, Instant::now())?;
-        match worker {
-            Some(worker) => self.queue.update_worker(worker).await,
-            None => self.queue.update().await,
-        }
-        Ok(())
+        self.finish(request_id, RequestOutcome::Aborted).await
     }
 
     pub async fn mark_dispatched(&self, request_id: &str) {
         self.queue.dispatched(request_id).await;
     }
 
+    /// Release request state and report its terminal admission outcome.
     pub async fn finish(
         &self,
         request_id: &str,
@@ -507,13 +502,13 @@ where
     ) -> Result<(), SequenceError> {
         let request_id = request_id.to_string();
         let worker = self.slots.request_worker(&request_id);
-        self.slots.free(&request_id, Instant::now())?;
+        let result = self.slots.free(&request_id, Instant::now());
         self.queue.finish(&request_id, outcome).await;
         match worker {
             Some(worker) => self.queue.update_worker(worker).await,
             None => self.queue.update().await,
         }
-        Ok(())
+        result
     }
 
     pub fn pending_count(&self) -> usize {
@@ -744,14 +739,18 @@ where
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use tokio::sync::{mpsc, watch};
 
     use super::*;
     use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
-    use crate::scheduling::PrefillLoadEstimator;
     use crate::scheduling::selector::DefaultWorkerSelector;
+    use crate::scheduling::{
+        AdmissionAction, AdmissionDecision, AdmissionEvent, AdmissionRequest,
+        PolicyClassAdmissionStrategy, PrefillLoadEstimator, WorkerPlacement,
+    };
     use crate::sequences::SequenceSubscriber;
     use crate::test_utils::{NoopSequencePublisher, SimpleWorkerConfig};
 
@@ -1409,6 +1408,70 @@ mod tests {
         scheduler.free("req-1").await.unwrap();
         assert!(scheduler.get_active_lora_counts().is_empty());
 
+        cancel_token.cancel();
+    }
+
+    struct AbortCountingStrategy(Arc<AtomicUsize>);
+
+    impl PolicyClassAdmissionStrategy for AbortCountingStrategy {
+        fn admit(&mut self, _request: AdmissionRequest<'_>) -> AdmissionDecision {
+            AdmissionDecision::Ready(WorkerPlacement::Any)
+        }
+
+        fn on_event(&mut self, event: AdmissionEvent) -> Vec<AdmissionAction> {
+            if matches!(event, AdmissionEvent::Aborted { .. }) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+            Vec::new()
+        }
+    }
+
+    #[tokio::test]
+    async fn free_aborts_admission_once() {
+        let workers = HashMap::from([(0, SimpleWorkerConfig::default())]);
+        let slots = Arc::new(ActiveSequencesMultiWorker::new(
+            NoopSequencePublisher,
+            64,
+            HashMap::from([(0, (0, 1))]),
+            false,
+            0,
+            "test",
+        ));
+        let (_cfg_tx, cfg_rx) = watch::channel(workers);
+        let aborted = Arc::new(AtomicUsize::new(0));
+        let mut strategies = PolicyClassAdmissionStrategies::new();
+        strategies.insert(
+            "default".to_owned(),
+            Box::new(AbortCountingStrategy(Arc::clone(&aborted))),
+        );
+        let cancel_token = CancellationToken::new();
+        let scheduler = LocalScheduler::new_with_policy_profile_and_admission_strategies(
+            slots,
+            cfg_rx,
+            PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs),
+            64,
+            DefaultWorkerSelector::new(None, "test"),
+            None,
+            None::<Arc<NoopOverlapScoresRefresh>>,
+            None,
+            Duration::from_secs(60),
+            true,
+            cancel_token.clone(),
+            "test",
+            false,
+            strategies,
+        );
+        scheduler
+            .schedule_request(request(ScheduleMode::Tracked {
+                request_id: "req-1".to_owned(),
+            }))
+            .await
+            .unwrap();
+
+        scheduler.free("req-1").await.unwrap();
+        scheduler.free("req-1").await.unwrap();
+
+        assert_eq!(aborted.load(Ordering::Relaxed), 1);
         cancel_token.cancel();
     }
 
