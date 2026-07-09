@@ -147,25 +147,14 @@ webhook:
 
 #### Namespace Filtering
 
-Control which namespaces are validated (applies to **cluster-wide operator** only):
+User-configured webhook namespace filtering is not supported. Helm rejects a non-empty
+`webhook.namespaceSelector` because global defaulting, mutation, validation, and conversion
+must not be scoped by user policy.
 
-```yaml
-# Only validate resources in namespaces with specific labels
-webhook:
-  namespaceSelector:
-    matchLabels:
-      dynamo-validation: enabled
-
-# Or exclude specific namespaces
-webhook:
-  namespaceSelector:
-    matchExpressions:
-    - key: dynamo-validation
-      operator: NotIn
-      values: ["disabled"]
-```
-
-**Note:** For **namespace-restricted operators** (deprecated), the namespace selector is automatically set to validate only the operator's namespace. This configuration is ignored in namespace-restricted mode.
+For development/test-only namespace-restricted mode, setting
+`namespaceRestriction.runNamespacedValidation=true` makes the chart create an exact
+namespace selector for that operator's validating webhook. The selector is chart-managed;
+global defaulting, mutation, and conversion remain unscoped.
 
 ---
 
@@ -335,28 +324,33 @@ helm install dynamo-platform . -n <namespace> -f values.yaml
 
 ---
 
-## Multi-Operator Deployments (DEPRECATED)
+## Development and Test Multi-Operator Deployments
 
-> **DEPRECATED:** Namespace-restricted mode and multi-operator deployments are deprecated and will be removed in a future release. Use a single cluster-wide operator instead.
+> [!WARNING]
+> Namespace-restricted and multi-operator configurations are only for development and testing. They are not supported for production. Use a single cluster-wide operator in production.
 
 The operator supports running both **cluster-wide** and **namespace-restricted** instances simultaneously using a **lease-based coordination mechanism**.
 
 ### Scenario
 
-```
+```text
 Cluster:
 ├─ Operator A (cluster-wide, namespace: platform-system)
-│  └─ Validates all namespaces EXCEPT team-a
+│  └─ Owns CRDs and global conversion, defaulting, mutation, and validation
 └─ Operator B (namespace-restricted, namespace: team-a)
-   └─ Validates only team-a namespace
+   └─ Reconciles team-a; optionally validates team-a
 ```
 
 ### How It Works
 
 1. **Namespace-restricted operator** creates a Lease in its namespace
-2. **Cluster-wide operator** watches for Leases named `dynamo-operator-ns-lock`
-3. **Cluster-wide operator** skips validation for namespaces with active Leases
-4. **Namespace-restricted operator** validates resources in its namespace
+2. **Cluster-wide operator** watches for Leases named `dynamo-operator-namespace-scope`
+3. **Cluster-wide operator** skips reconciliation and Go validation for namespaces with active Leases
+4. **Namespace-restricted operator** reconciles its namespace
+5. If `runNamespacedValidation=true`, the namespace-restricted operator validates resources in that namespace
+
+CRD schema and CEL validation always apply. Global conversion, defaulting, and mutation
+continue to apply whether namespaced validation is enabled or not.
 
 ### Lease Configuration
 
@@ -367,14 +361,15 @@ The lease mechanism is **automatically configured** based on deployment mode:
 namespaceRestriction:
   enabled: false
 # → Watches for leases in all namespaces
-# → Skips validation for namespaces with active leases
+# → Skips reconciliation and Go validation for namespaces with active leases
 
 # Namespace-restricted operator
 namespaceRestriction:
   enabled: true
-  namespace: team-a
+  targetNamespace: team-a
+  runNamespacedValidation: false
 # → Creates lease in team-a namespace
-# → Does NOT check for leases (no cluster permissions)
+# → Reconciles team-a without serving Go validation
 ```
 
 ### Deployment Example
@@ -383,39 +378,33 @@ namespaceRestriction:
 # 1. Deploy cluster-wide operator
 helm install platform-operator dynamo-platform \
   -n platform-system \
-  --set namespaceRestriction.enabled=false
+  --set dynamo-operator.namespaceRestriction.enabled=false
 
 # 2. Deploy namespace-restricted operator for team-a
 helm install team-a-operator dynamo-platform \
   -n team-a \
-  --set namespaceRestriction.enabled=true \
-  --set namespaceRestriction.namespace=team-a
+  --skip-crds \
+  --set dynamo-operator.namespaceRestriction.enabled=true \
+  --set dynamo-operator.namespaceRestriction.targetNamespace=team-a \
+  --set dynamo-operator.namespaceRestriction.runNamespacedValidation=true \
+  --set dynamo-operator.upgradeCRD=false
 ```
 
-### ValidatingWebhookConfiguration Naming
+Always pass `--skip-crds` for a namespace-restricted release. Helm installs the `crds/`
+directory before templates can enforce `upgradeCRD=false` and cannot detect a missing
+`--skip-crds` flag.
 
-The webhook configuration name reflects the deployment mode:
-
-- **Cluster-wide**: `<release>-validating`
-- **Namespace-restricted**: `<release>-validating-<namespace>`
-
-Example:
-
-```bash
-# Cluster-wide
-platform-operator-validating
-
-# Namespace-restricted (team-a)
-team-a-operator-validating-team-a
-```
-
-This allows multiple webhook configurations to coexist without conflicts.
+Run the same operator version in parallel whenever possible. Mixing versions is strongly
+discouraged; the cluster-wide operator owns the installed API schema and all global
+webhook behavior.
 
 ### Lease Health
 
 If the namespace-restricted operator is deleted or becomes unhealthy:
-- Lease expires after `leaseDuration + gracePeriod` (default: ~30 seconds)
-- Cluster-wide operator automatically resumes validation for that namespace
+
+- The release deletes its Lease during graceful shutdown
+- An abandoned Lease expires after `leaseDuration` (30 seconds by default)
+- The cluster-wide operator resumes reconciliation and Go validation for that namespace
 
 ---
 
@@ -642,7 +631,7 @@ helm upgrade <release> dynamo-platform -n <namespace>
 ### Multi-Tenant Deployments
 
 1. ✅ **Deploy one cluster-wide operator** for platform-wide validation
-2. ~~Deploy namespace-restricted operators for tenant-specific namespaces~~ (**DEPRECATED** - use cluster-wide mode instead)
+2. ✅ **Use namespace-restricted operators only for development or testing**, never as a production tenant-isolation mechanism
 
 ---
 
@@ -661,4 +650,3 @@ For issues or questions:
 - Check [Troubleshooting](#troubleshooting) section
 - Review operator logs: `kubectl logs -n <namespace> deployment/<release>-dynamo-operator`
 - Open an issue on GitHub
-

@@ -43,53 +43,82 @@ The Dynamo Platform Helm chart deploys the complete Dynamo Kubernetes Platform i
 
 ### Webhooks are now mandatory (v1.0.0+)
 
-The `webhook.enabled` Helm value has been removed. Admission webhooks are now a required component of the operator and cannot be disabled. This change aligns with the upcoming addition of CRD conversion webhooks, which are mandatory for multi-version API support.
+The `webhook.enabled` Helm value has been removed. Admission and conversion webhooks are
+required and cannot be disabled on the cluster-wide operator. Namespaced operators never
+serve webhooks; they use the cluster-wide operator's global API implementation.
 
 No action is required for most upgrades — the operator's built-in cert-controller automatically generates and rotates TLS certificates at startup. If you use cert-manager or externally managed certificates, ensure your existing configuration is correct before upgrading.
 
 ---
 
-## ⚠️ Important: Cluster-Wide vs Namespace-Scoped Deployment
+## ⚠️ Cluster-Wide and Namespaced Operators
 
-### Single Cluster-Wide Operator (Recommended)
+Exactly one cluster-wide Dynamo operator must own the cluster-wide API. It installs or
+updates the CRDs and owns global conversion, defaulting, mutation, and validation.
+Multiple cluster-wide installations are rejected.
 
-**By default, the Dynamo operator runs with cluster-wide permissions and should only be deployed ONCE per cluster.**
+> **DEVELOPMENT AND TESTING ONLY:** Namespace-restricted mode is not supported for
+> production.
 
-- ✅ **Recommended**: Deploy one cluster-wide operator per cluster
-- ❌ **Not Recommended**: Multiple cluster-wide operators in the same cluster
+Namespaced operators reconcile only their target namespace and renew a namespace-scoped
+Lease that makes the cluster-wide operator's reconcilers hold off. By default they do not
+serve admission. CRD schema and CEL validation still apply, while defaulting, mutation,
+and conversion are always served globally by the cluster-wide operator.
 
-### Multiple Namespace-Scoped Operators (Advanced)
+### Installing a Namespaced Development Operator
 
-If you need multiple operator instances (e.g., for multi-tenancy), use namespace-scoped deployment:
+> **CRITICAL: Always pass `--skip-crds` and set `upgradeCRD=false`.** Helm processes a
+> chart's `crds/` directory before rendering templates, so the chart cannot validate or
+> infer `--skip-crds`. Omitting it can install cluster-wide CRDs from the namespaced
+> release. The chart rejects namespaced installations with `upgradeCRD=true`, but it
+> cannot detect a missing `--skip-crds` flag.
 
-```yaml
-# values.yaml
-dynamo-operator:
-  namespaceRestriction:
-    enabled: true
-    targetNamespace: "my-tenant-namespace"  # Optional, defaults to release namespace
+```shell
+helm install tenant-dynamo . \
+  --namespace my-tenant-namespace \
+  --create-namespace \
+  --skip-crds \
+  --set dynamo-operator.namespaceRestriction.enabled=true \
+  --set dynamo-operator.upgradeCRD=false
 ```
+
+`namespaceRestriction.targetNamespace` may be set when the reconciliation target differs
+from the Helm release namespace. To test feature-gated validation from the namespaced
+operator, explicitly set:
+
+```shell
+--set dynamo-operator.namespaceRestriction.runNamespacedValidation=true
+```
+
+This creates a validating webhook scoped exactly to the target namespace. The active Lease
+makes cluster-wide Go validation stand down there, preventing duplicate validation. It does
+not move CRD ownership, conversion, defaulting, or mutation to the namespaced operator.
+
+Running different operator versions in parallel is strongly discouraged; use the same
+version whenever possible. The cluster-wide operator should own the newest installed APIs.
+For development, newer namespaced controller code is possible only while it remains
+compatible with the cluster-wide CRDs, conversion, defaulting, and mutation behavior.
+
+The namespaced release never runs `crd-apply` or serves conversion, defaulting, or mutation.
+On shutdown it releases its reconciliation Lease; after an ungraceful shutdown the Lease
+expires, allowing cluster-wide reconciliation and validation to resume.
+
+When upgrading an existing deployment, upgrade the cluster-wide release first and then
+each namespaced release. Remove any configured `webhook.namespaceSelector` before the
+upgrade and set `upgradeCRD=false` on every namespaced release. The existing Lease name
+and timing values remain compatible. Namespaced validation stays disabled unless explicitly
+enabled with `runNamespacedValidation=true`.
 
 ### Validation and Safety
 
-The chart includes built-in validation to prevent all operator conflicts:
-
-- **Automatic Detection**: Scans for existing operators (both cluster-wide and namespace-restricted) during installation
-- **Prevents Multiple Cluster-Wide**: Installation will fail if another cluster-wide operator exists
-- **Prevents Mixed Deployments (Type 1)**: Installation will fail if trying to install namespace-restricted operator when cluster-wide exists
-- **Prevents Mixed Deployments (Type 2)**: Installation will fail if trying to install cluster-wide operator when namespace-restricted operators exist
-- **Safe Defaults**: Leader election uses shared ID for proper coordination
-
-#### 🚫 **Blocked Conflict Scenarios**
-
-| Existing Operator | New Operator | Status | Reason |
-|-------------------|--------------|---------|--------|
-| None | Cluster-wide | ✅ **Allowed** | No conflicts |
-| None | Namespace-restricted | ✅ **Allowed** | No conflicts |
-| Cluster-wide | Cluster-wide | ❌ **Blocked** | Multiple cluster managers |
-| Cluster-wide | Namespace-restricted | ❌ **Blocked** | Cluster-wide already manages target namespace |
-| Namespace-restricted | Cluster-wide | ❌ **Blocked** | Would conflict with existing namespace operators |
-| Namespace-restricted A | Namespace-restricted B (diff ns) | ✅ **Allowed** | Different scopes |
+- **Single cluster-wide owner**: installation fails if another cluster-wide operator exists.
+- **No namespaced CRD upgrades**: `namespaceRestriction.enabled=true` with
+  `upgradeCRD=true` is rejected.
+- **Managed webhook scope**: setting `webhook.namespaceSelector` causes installation to
+  fail. The chart creates the exact selector itself only for explicit namespaced validation.
+- **Reconciliation leases**: cluster-wide reconcilers skip namespaces with an active
+  namespaced-operator Lease. Cluster-wide Go validation also skips them; CRD schema/CEL,
+  global defaulting, mutation, and conversion continue to apply.
 
 ## 🔧 Configuration
 

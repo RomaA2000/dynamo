@@ -400,6 +400,69 @@ func TestInjectIntoValidatingWebhooks_SkipsDifferentNamespace(t *testing.T) {
 	}
 }
 
+func TestInjectValidatingWebhooksDoesNotTouchMutationOrConversion(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testSecretName},
+		Data:       map[string][]byte{defaultCACertName: []byte("test-ca")},
+	}
+	validating := &admissionregistrationv1.ValidatingWebhookConfiguration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "test-validating",
+			Labels: map[string]string{partOfLabel: partOfValue, operatorNamespaceLabel: testNamespace},
+		},
+		Webhooks: []admissionregistrationv1.ValidatingWebhook{{
+			Name:                    "validate.webhook.io",
+			AdmissionReviewVersions: []string{"v1"},
+			SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
+		}},
+	}
+	mutating := &admissionregistrationv1.MutatingWebhookConfiguration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "test-mutating",
+			Labels: map[string]string{partOfLabel: partOfValue, operatorNamespaceLabel: testNamespace},
+		},
+		Webhooks: []admissionregistrationv1.MutatingWebhook{{
+			Name:                    "mutate.webhook.io",
+			AdmissionReviewVersions: []string{"v1"},
+			SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
+		}},
+	}
+	crd := newDGDConversionCRD()
+
+	cfg := &configv1alpha1.OperatorConfiguration{}
+	cfg.Server.Webhook.SecretName = testSecretName
+	injector := newTestInjector(fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(secret, validating, mutating, crd), cfg)
+	ctx := context.Background()
+
+	if err := injector.InjectValidatingWebhooks(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updatedValidating := &admissionregistrationv1.ValidatingWebhookConfiguration{}
+	if err := injector.client.Get(ctx, types.NamespacedName{Name: validating.Name}, updatedValidating); err != nil {
+		t.Fatalf("failed to get validating webhook config: %v", err)
+	}
+	if got := string(updatedValidating.Webhooks[0].ClientConfig.CABundle); got != "test-ca" {
+		t.Errorf("validating CA bundle = %q, want test-ca", got)
+	}
+
+	updatedMutating := &admissionregistrationv1.MutatingWebhookConfiguration{}
+	if err := injector.client.Get(ctx, types.NamespacedName{Name: mutating.Name}, updatedMutating); err != nil {
+		t.Fatalf("failed to get mutating webhook config: %v", err)
+	}
+	if updatedMutating.Webhooks[0].ClientConfig.CABundle != nil {
+		t.Error("mutating webhook CA bundle should remain untouched")
+	}
+
+	updatedCRD := &apiextensionsv1.CustomResourceDefinition{}
+	if err := injector.client.Get(ctx, types.NamespacedName{Name: crd.Name}, updatedCRD); err != nil {
+		t.Fatalf("failed to get CRD: %v", err)
+	}
+	if updatedCRD.Spec.Conversion.Webhook.ClientConfig.CABundle != nil {
+		t.Error("conversion CA bundle should remain untouched")
+	}
+}
+
 func TestInjectIntoMutatingWebhooks(t *testing.T) {
 	wc := &admissionregistrationv1.MutatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{

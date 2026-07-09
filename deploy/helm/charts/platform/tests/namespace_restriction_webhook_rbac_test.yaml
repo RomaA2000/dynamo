@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+suite: namespace restriction webhook RBAC
+templates:
+  - charts/dynamo-operator/templates/webhook-rbac.yaml
+tests:
+  - it: gives cluster-wide API mutation permissions only to the cluster-wide operator
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders no webhook RBAC for a namespaced operator
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.upgradeCRD: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: grants explicit namespaced validation access only to validating configurations
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.namespaceRestriction.runNamespacedValidation: true
+      dynamo-operator.upgradeCRD: false
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: rules[0].resources
+          value:
+            - validatingwebhookconfigurations
+        documentSelector:
+          path: kind
+          value: ClusterRole
+      - notExists:
+          path: rules[1]
+        documentSelector:
+          path: kind
+          value: ClusterRole

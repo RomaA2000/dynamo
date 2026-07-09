@@ -64,6 +64,29 @@ func TestValidateOperatorConfiguration_ValidNamespaceScoped(t *testing.T) {
 	}
 }
 
+func TestValidateOperatorConfiguration_ValidNamespaceScopedWithValidation(t *testing.T) {
+	cfg := validNamespaceScopedConfig()
+	cfg.Namespace.RunNamespacedValidation = true
+
+	errs := ValidateOperatorConfiguration(cfg)
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for namespace-scoped validation, got: %v", errs)
+	}
+}
+
+func TestValidateOperatorConfiguration_ClusterWideRejectsNamespacedValidation(t *testing.T) {
+	cfg := validConfig()
+	cfg.Namespace.RunNamespacedValidation = true
+
+	errs := ValidateOperatorConfiguration(cfg)
+	if len(errs) != 1 {
+		t.Fatalf("expected one error for cluster-wide namespaced validation, got %d: %v", len(errs), errs)
+	}
+	if errs[0].Field != "namespace.runNamespacedValidation" {
+		t.Errorf("unexpected field: %s", errs[0].Field)
+	}
+}
+
 func TestValidateOperatorConfiguration_MissingMPISecret(t *testing.T) {
 	cfg := validConfig()
 	cfg.MPI.SSHSecretName = ""

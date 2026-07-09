@@ -74,6 +74,14 @@ func validateLeaderElection(le *configv1alpha1.LeaderElectionConfiguration, fldP
 func validateNamespace(ns *configv1alpha1.NamespaceConfiguration, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
+	if ns.Restricted == "" && ns.RunNamespacedValidation {
+		allErrs = append(allErrs, field.Invalid(
+			fldPath.Child("runNamespacedValidation"),
+			ns.RunNamespacedValidation,
+			"may only be enabled in namespace-restricted development/test mode",
+		))
+	}
+
 	// Namespace-restricted mode validations
 	if ns.Restricted != "" {
 		scopePath := fldPath.Child("scope")

@@ -397,7 +397,7 @@ func (sr *PodSnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(podSnapshotContentToPodSnapshot),
 		).
 		WithEventFilter(commonController.EphemeralDeploymentEventFilter(sr.Config, sr.RuntimeConfig)).
-		Complete(sr)
+		Complete(commonController.WithNamespaceExclusion(sr, sr.RuntimeConfig))
 }
 
 // podSnapshotContentToPodSnapshot maps a PodSnapshotContent (including a delete-event tombstone) back

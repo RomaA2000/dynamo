@@ -64,8 +64,9 @@ dynamo-operator:
   # -- Whether to enable the Dynamo Kubernetes operator deployment
   enabled: true
 
-  # -- Whether to manage CRDs via a pre-install/pre-upgrade hook Job.
-  # The Job runs the operator image with the crd-apply tool to apply CRDs via server-side apply.
+  # -- Whether the cluster-wide operator applies bundled CRDs via crd-apply.
+  # This must be false for namespace-restricted installations, which must also
+  # be installed with Helm's --skip-crds flag.
   upgradeCRD: true
 
   # Environment variables to pass to operator Deployment.
@@ -79,22 +80,24 @@ dynamo-operator:
 
   # -- URL for the Model Express server if not deployed by this helm chart. This is ignored if Model Express server is installed by this helm chart (global.model-express.enabled is true).
   modelExpressURL: ""
-  # -- DEPRECATED: Namespace-restricted mode is deprecated and will be removed in a future release. Use cluster-wide mode (the default) instead. Do not enable this for new deployments.
+  # -- DEVELOPMENT AND TESTING ONLY: Namespace-restricted mode is not supported for production. Use cluster-wide mode (the default) for production deployments.
   namespaceRestriction:
-    # -- DEPRECATED: Do not enable for new deployments. Namespace-restricted mode is deprecated.
+    # -- Enable development/test-only namespace-restricted reconciliation.
     enabled: false
-    # -- DEPRECATED: Only used in namespace-restricted mode, which is deprecated.
+    # -- Explicitly serve validation for the target namespace from this namespaced operator. CRD schema/CEL validation always applies; defaulting, mutation, and conversion remain cluster-wide. Disabled by default.
+    runNamespacedValidation: false
+    # -- Reconciliation target for development/test-only namespace-restricted mode. Defaults to the release namespace.
     targetNamespace:
-    # -- DEPRECATED: Only used in namespace-restricted mode, which is deprecated.
+    # -- Reconciliation ownership claim settings for development/test-only namespace-restricted mode.
     lease:
-      # -- DEPRECATED: Lease duration for namespace-restricted mode, which is deprecated.
+      # -- Reconciliation ownership lease duration.
       duration: 30s
-      # -- DEPRECATED: Lease renew interval for namespace-restricted mode, which is deprecated.
+      # -- Reconciliation ownership lease renewal interval.
       renewInterval: 10s
 
-  # -- DEPRECATED: GPU discovery for namespace-scoped operators is deprecated along with namespace-restricted mode.
+  # -- GPU discovery settings for development/test-only namespace-restricted operators.
   gpuDiscovery:
-    # -- DEPRECATED: Only relevant when namespaceRestriction is enabled, which is deprecated.
+    # -- Enable GPU discovery in namespace-restricted mode.
     enabled: true
 
   # -- The Dynamo discovery backend to use. Default is "kubernetes" for Kubernetes API service discovery. Set to "etcd" to use ETCD for discovery. --
@@ -236,8 +239,7 @@ dynamo-operator:
     # -- Timeout in seconds for webhook validation calls. If the webhook doesn't respond within this time, the request will be handled according to the failurePolicy.
     timeoutSeconds: 10
 
-    # Namespace selector for webhook scope control
-    # -- Custom namespace selector for webhook validation. Use this to include or exclude specific namespaces from webhook validation. For CLUSTER-WIDE operators, you can exclude namespaces managed by namespace-restricted operators by using: matchExpressions: [{ key: "dynamo-operator", operator: "NotIn", values: ["namespace-restricted"] }]. For NAMESPACE-RESTRICTED operators, leave empty as it will be auto-configured to match only the operator's namespace.
+    # -- Unsupported; must remain empty. The chart manages exact namespace scoping when namespaceRestriction.runNamespacedValidation is enabled. Global defaulting, mutation, and conversion cannot be scoped. Installation fails if set.
     namespaceSelector: {}
 
     # cert-manager integration for automated certificate lifecycle management

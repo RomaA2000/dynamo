@@ -6,10 +6,104 @@
 package webhook
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
+
+var errValidationCalled = errors.New("validation called")
+
+type staticExcludedNamespaces map[string]bool
+
+func (s staticExcludedNamespaces) Contains(namespace string) bool {
+	return s[namespace]
+}
+
+type rejectingValidator struct{}
+
+func (rejectingValidator) ValidateCreate(context.Context, runtime.Object) (admission.Warnings, error) {
+	return nil, errValidationCalled
+}
+
+func (rejectingValidator) ValidateUpdate(context.Context, runtime.Object, runtime.Object) (admission.Warnings, error) {
+	return nil, errValidationCalled
+}
+
+func (rejectingValidator) ValidateDelete(context.Context, runtime.Object) (admission.Warnings, error) {
+	return nil, errValidationCalled
+}
+
+func TestLeaseAwareValidator(t *testing.T) {
+	validator := NewLeaseAwareValidator(rejectingValidator{}, staticExcludedNamespaces{"claimed": true})
+	claimed := &corev1.ConfigMap{}
+	claimed.Namespace = "claimed"
+	unclaimed := &corev1.ConfigMap{}
+	unclaimed.Namespace = "unclaimed"
+
+	tests := []struct {
+		name string
+		call func() error
+		want error
+	}{
+		{
+			name: "skips create in claimed namespace",
+			call: func() error {
+				_, err := validator.ValidateCreate(context.Background(), claimed)
+				return err
+			},
+		},
+		{
+			name: "skips update in claimed namespace",
+			call: func() error {
+				_, err := validator.ValidateUpdate(context.Background(), unclaimed, claimed)
+				return err
+			},
+		},
+		{
+			name: "skips delete in claimed namespace",
+			call: func() error {
+				_, err := validator.ValidateDelete(context.Background(), claimed)
+				return err
+			},
+		},
+		{
+			name: "validates unclaimed namespace",
+			call: func() error {
+				_, err := validator.ValidateCreate(context.Background(), unclaimed)
+				return err
+			},
+			want: errValidationCalled,
+		},
+		{
+			name: "validates object without metadata",
+			call: func() error {
+				_, err := validator.ValidateCreate(context.Background(), &runtime.Unknown{})
+				return err
+			},
+			want: errValidationCalled,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.call(); !errors.Is(got, test.want) {
+				t.Errorf("validation error = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestNewLeaseAwareValidatorWithoutClaimsReturnsOriginal(t *testing.T) {
+	original := rejectingValidator{}
+	if got := NewLeaseAwareValidator(original, nil); got != original {
+		t.Errorf("expected original validator, got %T", got)
+	}
+}
 
 func TestCanModifyDGDReplicas(t *testing.T) {
 	tests := []struct {

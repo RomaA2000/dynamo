@@ -484,5 +484,5 @@ func (r *CheckpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			GenericFunc: func(ge event.GenericEvent) bool { return true },
 		})).
 		WithEventFilter(commonController.EphemeralDeploymentEventFilter(r.Config, r.RuntimeConfig)).
-		Complete(r)
+		Complete(commonController.WithNamespaceExclusion(r, r.RuntimeConfig))
 }

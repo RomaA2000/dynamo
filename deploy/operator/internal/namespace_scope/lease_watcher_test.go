@@ -36,7 +36,7 @@ func TestLeaseWatcher_HandleLeaseAdd(t *testing.T) {
 		excludedNamespace string
 	}{
 		{
-			name: "adds namespace for valid marker lease",
+			name: "adds namespace for valid reconciliation lease",
 			lease: &coordinationv1.Lease{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      LeaseName,

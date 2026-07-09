@@ -14,10 +14,8 @@
 # limitations under the License.
 
 {{/*
-Validation to prevent operator conflicts
-With the namespace scope marker lease mechanism, cluster-wide and namespace-restricted
-operators can now coexist safely. The cluster-wide operator automatically excludes
-namespaces that have namespace-restricted operators.
+Validation to prevent operator conflicts. Namespace reconciliation leases allow
+the cluster-wide operator to avoid namespaces managed by namespaced operators.
 
 This validation only prevents:
 1. Multiple cluster-wide operators (would compete for the same resources)
@@ -74,9 +72,9 @@ This validation only prevents:
     {{- end -}}
 
     {{- if $existingOperatorNamespace -}}
-      {{- fail (printf "VALIDATION ERROR: Found existing cluster-wide Dynamo operator from release '%s' in namespace '%s' (ClusterRole: %s). Only one cluster-wide Dynamo operator should be deployed per cluster. Either:\n1. Use the existing cluster-wide operator (no need to install another), or\n2. Uninstall the existing cluster-wide operator first: %s\n\nNote: You can install namespace-restricted operators alongside the cluster-wide operator using: --set namespaceRestriction.enabled=true" $existingOperatorRelease $existingOperatorNamespace $existingOperatorRoleName $uninstallCmd) -}}
+      {{- fail (printf "VALIDATION ERROR: Found existing cluster-wide Dynamo operator from release '%s' in namespace '%s' (ClusterRole: %s). Only one cluster-wide Dynamo operator should be deployed per cluster. Either:\n1. Use the existing cluster-wide operator (no need to install another), or\n2. Uninstall the existing cluster-wide operator first: %s\n\nNote: A namespace-restricted operator may coexist when installed with --skip-crds, namespaceRestriction.enabled=true, and upgradeCRD=false." $existingOperatorRelease $existingOperatorNamespace $existingOperatorRoleName $uninstallCmd) -}}
     {{- else -}}
-      {{- fail (printf "VALIDATION ERROR: Found existing cluster-wide Dynamo operator from release '%s' (ClusterRole: %s). Only one cluster-wide Dynamo operator should be deployed per cluster. Either:\n1. Use the existing cluster-wide operator (no need to install another), or\n2. Uninstall the existing cluster-wide operator first: %s\n\nNote: You can install namespace-restricted operators alongside the cluster-wide operator using: --set namespaceRestriction.enabled=true" $existingOperatorRelease $existingOperatorRoleName $uninstallCmd) -}}
+      {{- fail (printf "VALIDATION ERROR: Found existing cluster-wide Dynamo operator from release '%s' (ClusterRole: %s). Only one cluster-wide Dynamo operator should be deployed per cluster. Either:\n1. Use the existing cluster-wide operator (no need to install another), or\n2. Uninstall the existing cluster-wide operator first: %s\n\nNote: A namespace-restricted operator may coexist when installed with --skip-crds, namespaceRestriction.enabled=true, and upgradeCRD=false." $existingOperatorRelease $existingOperatorRoleName $uninstallCmd) -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
@@ -95,6 +93,16 @@ This validation only prevents:
 Validation for configuration consistency
 */}}
 {{- define "dynamo-operator.validateConfiguration" -}}
+{{/* Namespace-restricted operators must never install or mutate cluster-wide APIs. */}}
+{{- if and .Values.namespaceRestriction.enabled .Values.upgradeCRD -}}
+  {{- fail "VALIDATION ERROR: namespaceRestriction.enabled=true is incompatible with upgradeCRD=true. Set upgradeCRD=false and install the namespaced release with --skip-crds so it does not install or update cluster-wide CRDs." -}}
+{{- end -}}
+{{- if and .Values.namespaceRestriction.runNamespacedValidation (not .Values.namespaceRestriction.enabled) -}}
+  {{- fail "VALIDATION ERROR: namespaceRestriction.runNamespacedValidation=true requires namespaceRestriction.enabled=true." -}}
+{{- end -}}
+{{- if not (empty .Values.webhook.namespaceSelector) -}}
+  {{- fail "VALIDATION ERROR: webhook.namespaceSelector is managed by the chart and must be empty. Global defaulting, mutation, validation, and conversion remain unscoped; namespaceRestriction.runNamespacedValidation creates the exact target namespace selector automatically." -}}
+{{- end -}}
 {{/* Validate leader election namespace setting */}}
 {{- if and (not .Values.namespaceRestriction.enabled) .Values.controllerManager.leaderElection.namespace -}}
   {{- if eq .Values.controllerManager.leaderElection.namespace .Release.Namespace -}}

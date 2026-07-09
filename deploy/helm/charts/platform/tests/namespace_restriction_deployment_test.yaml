@@ -1,0 +1,151 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+suite: namespace restriction deployment
+templates:
+  - charts/dynamo-operator/templates/deployment.yaml
+  - charts/dynamo-operator/templates/operator-config.yaml
+tests:
+  - it: runs crd-apply for the default cluster-wide installation
+    template: charts/dynamo-operator/templates/deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.spec.initContainers
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: rejects CRD upgrades in namespaced mode
+    template: charts/dynamo-operator/templates/deployment.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.upgradeCRD: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "namespaceRestriction.enabled=true is incompatible with upgradeCRD=true"
+
+  - it: rejects namespaced validation in cluster-wide mode
+    template: charts/dynamo-operator/templates/deployment.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: false
+      dynamo-operator.namespaceRestriction.runNamespacedValidation: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "runNamespacedValidation=true requires namespaceRestriction.enabled=true"
+
+  - it: omits crd-apply in namespaced mode
+    template: charts/dynamo-operator/templates/deployment.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.upgradeCRD: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].ports[1]
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts[1]
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.volumes[1]
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: serves webhooks but still omits crd-apply for explicit namespaced validation
+    template: charts/dynamo-operator/templates/deployment.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.namespaceRestriction.runNamespacedValidation: true
+      dynamo-operator.upgradeCRD: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+        documentSelector:
+          path: kind
+          value: Deployment
+      - exists:
+          path: spec.template.spec.containers[0].ports[1]
+        documentSelector:
+          path: kind
+          value: Deployment
+      - exists:
+          path: spec.template.spec.containers[0].volumeMounts[1]
+        documentSelector:
+          path: kind
+          value: Deployment
+      - exists:
+          path: spec.template.spec.volumes[1]
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: configures the existing reconciliation lease without webhook ownership
+    template: charts/dynamo-operator/templates/operator-config.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.namespaceRestriction.targetNamespace: tenant-a
+      dynamo-operator.namespaceRestriction.lease.duration: 45s
+      dynamo-operator.namespaceRestriction.lease.renewInterval: 15s
+      dynamo-operator.upgradeCRD: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'restricted: "tenant-a"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'leaseDuration: "45s"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'leaseRenewInterval: "15s"'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "certProvisionMode:"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "serviceName:"
+
+  - it: configures explicit namespaced validation
+    template: charts/dynamo-operator/templates/operator-config.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.namespaceRestriction.runNamespacedValidation: true
+      dynamo-operator.namespaceRestriction.targetNamespace: tenant-a
+      dynamo-operator.upgradeCRD: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "runNamespacedValidation: true"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "certProvisionMode:"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "serviceName:"
+
+  - it: rejects webhook namespace selectors for the cluster-wide installation
+    template: charts/dynamo-operator/templates/deployment.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: false
+      dynamo-operator.webhook.namespaceSelector.matchLabels.tenant: selected
+    asserts:
+      - failedTemplate:
+          errorPattern: "webhook.namespaceSelector is managed by the chart and must be empty"
+
+  - it: rejects webhook namespace selectors for a namespaced installation
+    template: charts/dynamo-operator/templates/deployment.yaml
+    set:
+      dynamo-operator.namespaceRestriction.enabled: true
+      dynamo-operator.upgradeCRD: false
+      dynamo-operator.webhook.namespaceSelector.matchLabels.tenant: selected
+    asserts:
+      - failedTemplate:
+          errorPattern: "webhook.namespaceSelector is managed by the chart and must be empty"

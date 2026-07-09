@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-// Deprecated: Package namespace_scope implements the lease-based coordination mechanism for the
-// deprecated namespace-restricted operator mode. It will be removed in a future release.
+// Package namespace_scope implements lease-based coordination for the development/test-only
+// namespace-restricted operator mode.
 package namespace_scope
 
 import (
@@ -35,12 +35,13 @@ import (
 )
 
 const (
-	// LeaseName is the well-known name for namespace scope marker leases
+	// LeaseName is the well-known name for namespace reconciliation ownership leases.
 	LeaseName = "dynamo-operator-namespace-scope"
 )
 
-// Deprecated: LeaseManager manages the namespace scope marker lease for the deprecated
-// namespace-restricted operator mode.
+// LeaseManager maintains reconciliation ownership for namespace-restricted mode.
+// The lease also tells cluster-wide validation to stand down for the namespace;
+// mutation, defaulting, and conversion remain global.
 type LeaseManager struct {
 	client          kubernetes.Interface
 	namespace       string
@@ -117,7 +118,7 @@ func (lm *LeaseManager) Start(ctx context.Context) error {
 	// Initialize error channel
 	lm.errCh = make(chan error, 1) // buffered to avoid blocking
 
-	lm.logger.Info("Starting namespace scope marker lease manager",
+	lm.logger.Info("Starting namespace reconciliation lease manager",
 		"leaseName", LeaseName,
 		"leaseDuration", lm.leaseDuration,
 		"renewInterval", lm.renewInterval,
@@ -129,7 +130,7 @@ func (lm *LeaseManager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create initial lease: %w", err)
 	}
 
-	lm.logger.Info("Namespace scope marker lease created successfully")
+	lm.logger.Info("Namespace reconciliation lease created successfully")
 
 	// Start renewal loop in background
 	lm.wg.Add(1)
@@ -140,7 +141,7 @@ func (lm *LeaseManager) Start(ctx context.Context) error {
 
 // Stop stops the lease renewal loop and releases the lease
 func (lm *LeaseManager) Stop(ctx context.Context) error {
-	lm.logger.Info("Stopping namespace scope marker lease manager")
+	lm.logger.Info("Stopping namespace reconciliation lease manager")
 
 	// Signal renewal loop to stop
 	close(lm.stopCh)
@@ -155,7 +156,7 @@ func (lm *LeaseManager) Stop(ctx context.Context) error {
 		// If lease is already deleted (TTL expiry, manual cleanup, etc.), that's fine
 		// The goal is achieved - the lease is gone
 		if k8sErrors.IsNotFound(err) {
-			lm.logger.Info("Namespace scope marker lease already deleted")
+			lm.logger.Info("Namespace reconciliation lease already deleted")
 			return nil
 		}
 		// Real failure - return the error
@@ -163,11 +164,11 @@ func (lm *LeaseManager) Stop(ctx context.Context) error {
 		return err
 	}
 
-	lm.logger.Info("Namespace scope marker lease deleted successfully")
+	lm.logger.Info("Namespace reconciliation lease deleted successfully")
 	return nil
 }
 
-// createOrUpdateLease creates or updates the namespace scope marker lease
+// createOrUpdateLease creates or updates the namespace reconciliation lease.
 func (lm *LeaseManager) createOrUpdateLease(ctx context.Context) error {
 	now := metav1.NewMicroTime(time.Now())
 	leaseDurationSeconds := int32(lm.leaseDuration.Seconds())
@@ -181,6 +182,7 @@ func (lm *LeaseManager) createOrUpdateLease(ctx context.Context) error {
 			HolderIdentity:       &lm.holderIdentity,
 			LeaseDurationSeconds: &leaseDurationSeconds,
 			AcquireTime:          &now,
+			RenewTime:            &now,
 		},
 	}
 
@@ -195,7 +197,7 @@ func (lm *LeaseManager) createOrUpdateLease(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create lease: %w", err)
 		}
-		lm.logger.Info("Created namespace scope marker lease")
+		lm.logger.Info("Created namespace reconciliation lease")
 		return nil
 	}
 
@@ -209,7 +211,7 @@ func (lm *LeaseManager) createOrUpdateLease(ctx context.Context) error {
 		return fmt.Errorf("failed to update lease: %w", err)
 	}
 
-	lm.logger.V(1).Info("Refreshed namespace scope marker lease")
+	lm.logger.V(1).Info("Refreshed namespace reconciliation lease")
 	return nil
 }
 

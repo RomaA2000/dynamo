@@ -30,64 +30,74 @@ Dynamo operator is a Kubernetes operator that simplifies the deployment, configu
 
 ## Deployment Modes
 
-The Dynamo operator supports three deployment modes to accommodate different cluster environments and use cases:
+The Dynamo operator has one supported production mode and two development/test configurations:
 
 ### 1. Cluster-Wide Mode (Default, Recommended)
 
 The operator monitors and manages DynamoGraph resources across **all namespaces** in the cluster.
 
 **When to Use:**
+
 - You have full cluster admin access
 - You want centralized management of all Dynamo workloads
 - Standard production deployment on a dedicated cluster
 
 ---
 
-### 2. Namespace-Scoped Mode (DEPRECATED)
+### 2. Namespace-Scoped Mode (Development and Testing Only)
 
-> **DEPRECATED:** Namespace-scoped mode (`namespaceRestriction.enabled=true`) is deprecated and will be removed in a future release. Use cluster-wide mode instead. Do not use this for new deployments.
+> [!WARNING]
+> Namespace-scoped mode (`namespaceRestriction.enabled=true`) is not supported for production. Use it only for development and testing.
 
-The operator monitors and manages DynamoGraph resources **only in a specific namespace**. A lease marker is created to signal the operator's presence to any cluster-wide operators.
+The operator monitors and manages DynamoGraph resources **only in a specific namespace**. A Lease claim makes the cluster-wide operator stand down there.
 
 **When to Use:**
-- You're on a shared/multi-tenant cluster
-- You only have namespace-level permissions
+
 - You want to test a new operator version in isolation
-- You need to avoid conflicts with other operators
+- You are developing controller behavior in one namespace
 
 **Installation:**
+
 ```bash
 helm install dynamo-platform dynamo-platform-${RELEASE_VERSION}.tgz \
   --namespace my-namespace \
   --create-namespace \
-  --set dynamo-operator.namespaceRestriction.enabled=true
+  --skip-crds \
+  --set dynamo-operator.namespaceRestriction.enabled=true \
+  --set dynamo-operator.upgradeCRD=false
 ```
+
+Namespaced Go validation is off by default. Set
+`dynamo-operator.namespaceRestriction.runNamespacedValidation=true` to serve validation
+from that operator using its feature gates. CRDs, conversion, defaulting, and mutation
+remain owned by the cluster-wide operator.
 
 ---
 
-### 3. Hybrid Mode (DEPRECATED)
+### 3. Cluster-Wide Plus Namespace-Scoped Mode (Development and Testing Only)
 
-> **DEPRECATED:** Hybrid mode relies on namespace-scoped operators, which are deprecated and will be removed in a future release. Use a single cluster-wide operator instead.
+> [!WARNING]
+> This configuration is not supported for production. Use a single cluster-wide operator in production.
 
-A **cluster-wide operator** manages most namespaces, while **one or more namespace-scoped operators** run in specific namespaces (e.g., for testing new versions). The cluster-wide operator automatically detects and excludes namespaces with namespace-scoped operators using lease markers.
+A **cluster-wide operator** manages most namespaces in a development cluster, while **one or more namespace-scoped operators** run in specific namespaces for testing. The cluster-wide operator automatically detects and excludes namespaces with namespace-scoped operators using lease markers.
 
 **When to Use:**
-- Running production workloads with a stable operator version
-- Testing new operator versions in isolated namespaces without affecting production
-- Gradual rollout of operator updates
-- Development/staging environments on production clusters
+
+- Testing new operator versions in isolated namespaces on a development cluster
+- Developing or testing controller feature gates in one namespace
 
 **How It Works:**
+
 1. Namespace-scoped operator creates a lease named `dynamo-operator-namespace-scope` in its namespace
 2. Cluster-wide operator watches for these lease markers across all namespaces
-3. Cluster-wide operator automatically excludes any namespace with a lease marker
-4. If namespace-scoped operator stops, its lease expires (TTL: 30s by default)
-5. Cluster-wide operator automatically resumes managing that namespace
+3. Cluster-wide operator excludes reconciliation and Go validation for any namespace with a lease marker
+4. Namespace-scoped operator reconciles its namespace and optionally serves validation when `runNamespacedValidation=true`
+5. If the namespace-scoped operator stops, its lease expires and cluster-wide reconciliation and validation resume
 
 **Setup Example:**
 
 ```bash
-# 1. Install cluster-wide operator (production, v1.0.0)
+# 1. Install the cluster-wide operator in a development cluster
 helm install dynamo-platform dynamo-platform-${RELEASE_VERSION}.tgz \
   --namespace dynamo-system \
   --create-namespace
@@ -96,9 +106,16 @@ helm install dynamo-platform dynamo-platform-${RELEASE_VERSION}.tgz \
 helm install dynamo-test dynamo-platform-${RELEASE_VERSION}.tgz \
   --namespace test-namespace \
   --create-namespace \
+  --skip-crds \
   --set dynamo-operator.namespaceRestriction.enabled=true \
+  --set dynamo-operator.namespaceRestriction.runNamespacedValidation=true \
+  --set dynamo-operator.upgradeCRD=false \
   --set dynamo-operator.controllerManager.manager.image.tag=v2.0.0-beta
 ```
+
+Run the same operator version in parallel whenever possible. Mixing versions is strongly
+discouraged. If development requires newer namespaced controller code, the cluster-wide
+operator must still own CRDs and global webhook behavior compatible with that code.
 
 **Observability:**
 
@@ -196,7 +213,8 @@ helm fetch https://helm.ngc.nvidia.com/nvidia/ai-dynamo/charts/dynamo-platform-$
 helm install dynamo-platform dynamo-platform-${RELEASE_VERSION}.tgz --namespace ${NAMESPACE} --create-namespace
 ```
 
-> **Note:** Namespace-scoped and hybrid deployment modes are deprecated. Use cluster-wide mode for all new deployments. See [Deployment Modes](#deployment-modes) above if you need backward-compatible configurations.
+> [!NOTE]
+> Namespace-scoped configurations are only for development and testing and are not supported for production. See [Deployment Modes](#deployment-modes).
 
 ### Building from Source
 

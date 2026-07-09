@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- if or (not .Values.namespaceRestriction.enabled) .Values.namespaceRestriction.runNamespacedValidation }}
 ---
 # Role to manage the webhook certificate secret (create placeholder, read, update)
 apiVersion: rbac.authorization.k8s.io/v1
@@ -64,9 +65,8 @@ subjects:
   name: {{ include "dynamo-operator.fullname" . }}-controller-manager
   namespace: {{ .Release.Namespace }}
 ---
-# ClusterRole for patching webhook configurations and CRDs (cluster-scoped resources).
-# These are cluster-scoped resources that cannot be granted via a namespace-scoped Role,
-# so they are always provided as a dedicated ClusterRole regardless of namespace-restriction mode.
+# ClusterRole for injecting CA bundles. Namespaced validation may patch only its
+# labeled ValidatingWebhookConfiguration; mutation and CRDs stay cluster-wide-owned.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -81,13 +81,16 @@ rules:
   - admissionregistration.k8s.io
   resources:
   - validatingwebhookconfigurations
+  {{- if not .Values.namespaceRestriction.enabled }}
   - mutatingwebhookconfigurations
+  {{- end }}
   verbs:
   - get
   - list
   - watch
   - update
   - patch
+{{- if not .Values.namespaceRestriction.enabled }}
 - apiGroups:
   - apiextensions.k8s.io
   resources:
@@ -98,6 +101,7 @@ rules:
   - watch
   - update
   - patch
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -116,3 +120,4 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "dynamo-operator.fullname" . }}-controller-manager
   namespace: {{ .Release.Namespace }}
+{{- end }}

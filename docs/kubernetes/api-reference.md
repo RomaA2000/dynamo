@@ -3451,16 +3451,16 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `restricted` _string_ | Deprecated: Namespace-restricted mode is deprecated and will be removed in a future release.<br />Use cluster-wide mode (leave Restricted empty) instead. |  |  |
-| `scope` _[NamespaceScopeConfiguration](#namespacescopeconfiguration)_ | Deprecated: Scope is only used in namespace-restricted mode, which is deprecated. |  |  |
+| `restricted` _string_ | Restricted enables development/test-only namespace-restricted reconciliation.<br />Namespace-restricted mode is not supported for production. |  |  |
+| `runNamespacedValidation` _boolean_ | RunNamespacedValidation makes a namespace-restricted operator serve validating<br />admission webhooks for its namespace. It does not take ownership of defaulting,<br />mutation, conversion, or CRDs, which remain cluster-wide responsibilities. | false |  |
+| `scope` _[NamespaceScopeConfiguration](#namespacescopeconfiguration)_ | Scope configures the reconciliation ownership claim used in namespace-restricted mode. |  |  |
 
 
 #### NamespaceScopeConfiguration
 
 
 
-Deprecated: NamespaceScopeConfiguration is used only by the deprecated namespace-restricted
-mode and will be removed in a future release.
+NamespaceScopeConfiguration configures development/test-only namespace ownership.
 
 
 
@@ -3469,8 +3469,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `leaseDuration` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#duration-v1-meta)_ | LeaseDuration is the duration of namespace scope marker lease before expiration | 30s |  |
-| `leaseRenewInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#duration-v1-meta)_ | LeaseRenewInterval is the interval for renewing namespace scope marker lease | 10s |  |
+| `leaseDuration` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#duration-v1-meta)_ | LeaseDuration is the duration of the reconciliation ownership lease before expiration. | 30s |  |
+| `leaseRenewInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#duration-v1-meta)_ | LeaseRenewInterval is the interval for renewing the reconciliation ownership lease. | 10s |  |
 
 
 #### OperatorConfiguration

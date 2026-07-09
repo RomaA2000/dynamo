@@ -365,6 +365,23 @@ func (i *CABundleInjector) InjectAll(ctx context.Context) error {
 	return nil
 }
 
+// InjectValidatingWebhooks reads the CA bundle from the cert secret and injects
+// it only into validating webhook configurations owned by this operator instance.
+// Namespace-restricted operators use this without touching mutation or CRDs.
+func (i *CABundleInjector) InjectValidatingWebhooks(ctx context.Context) error {
+	caBundle, err := i.readCABundle(ctx)
+	if err != nil {
+		return fmt.Errorf("reading CA bundle from secret %s/%s: %w", i.namespace, i.cfg.Server.Webhook.SecretName, err)
+	}
+
+	if err := i.injectIntoValidatingWebhooks(ctx, caBundle); err != nil {
+		return err
+	}
+
+	i.logger.Info("CA bundle injected into validating webhook configurations")
+	return nil
+}
+
 // InjectCRDConversionCA reads the CA bundle from the cert secret and patches it
 // into the CRD conversion webhook configurations.
 func (i *CABundleInjector) InjectCRDConversionCA(ctx context.Context) error {

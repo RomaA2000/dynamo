@@ -16,9 +16,9 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Whether to apply CRDs via an init container on the operator Deployment.
-# Uses server-side apply with the bundled /crd-apply binary.
-# Set to false if CRDs are managed externally (e.g., via GitOps or a separate pipeline).
+# -- Whether the cluster-wide operator applies bundled CRDs via its crd-apply
+# init container. This must be false for namespace-restricted installations.
+# Namespaced installations must additionally use Helm's --skip-crds flag.
 upgradeCRD: true
 
 featureGates:
@@ -30,21 +30,23 @@ featureGates:
 # Prefer featureGates.gmsSnapshot for the temporary GMS + Snapshot gate.
 env: []
 
-# -- DEPRECATED: Namespace-restricted mode is deprecated and will be removed in a future release. Use cluster-wide mode (the default) instead. Do not enable this for new deployments.
+# -- DEVELOPMENT AND TESTING ONLY: Namespace-restricted mode is not supported for production. Use cluster-wide mode (the default) for production deployments.
 namespaceRestriction:
-  # -- DEPRECATED: Do not enable for new deployments. Namespace-restricted mode is deprecated.
+  # -- Enable development/test-only namespace-restricted reconciliation.
   enabled: false
-  # -- DEPRECATED: Only used in namespace-restricted mode, which is deprecated.
+  # -- Explicitly serve validation for the target namespace from this namespaced operator. CRD schema/CEL validation always applies; defaulting, mutation, and conversion remain cluster-wide. Disabled by default.
+  runNamespacedValidation: false
+  # -- Reconciliation target for development/test-only namespace-restricted mode. Defaults to the release namespace.
   targetNamespace: ""
-  # -- DEPRECATED: Only used in namespace-restricted mode, which is deprecated.
+  # -- Reconciliation ownership claim settings for development/test-only namespace-restricted mode.
   lease:
-    # -- DEPRECATED: Lease duration for namespace-restricted mode, which is deprecated.
+    # -- Reconciliation ownership lease duration.
     duration: 30s
-    # -- DEPRECATED: Lease renew interval for namespace-restricted mode, which is deprecated.
+    # -- Reconciliation ownership lease renewal interval.
     renewInterval: 10s
-# -- DEPRECATED: GPU discovery for namespace-scoped operators is deprecated along with namespace-restricted mode.
+# -- GPU discovery settings for development/test-only namespace-restricted operators.
 gpuDiscovery:
-  # -- DEPRECATED: Only relevant when namespaceRestriction is enabled, which is deprecated.
+  # -- Enable GPU discovery in namespace-restricted mode.
   enabled: true
 controllerManager:
   tolerations: []
@@ -218,17 +220,9 @@ webhook:
   # Timeout for webhook calls (in seconds)
   timeoutSeconds: 10
 
-  # Namespace selector for webhooks
-  # Use this to exclude certain namespaces from validation
-  #
-  # For CLUSTER-WIDE operators: Exclude namespaces with namespace-restricted operators
-  # namespaceSelector:
-  #   matchExpressions:
-  #   - key: dynamo-operator
-  #     operator: NotIn
-  #     values: ["namespace-restricted"]
-  #
-  # For NAMESPACE-RESTRICTED operators: Leave empty (auto-configured)
+  # -- Unsupported; must remain empty. The chart manages exact namespace scoping
+  # when namespaceRestriction.runNamespacedValidation is enabled. Global defaulting,
+  # mutation, and conversion cannot be scoped. Installation fails if set.
   namespaceSelector: {}
 
   # cert-manager integration (optional, alternative to built-in cert-controller)

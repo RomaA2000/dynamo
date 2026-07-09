@@ -193,8 +193,6 @@ func (h *DynamoGraphDeploymentHandler) validateDelete(
 }
 
 // RegisterWithManager registers the webhook with the manager.
-// The handler is automatically wrapped with LeaseAwareValidator to add namespace exclusion logic
-// and ObservedValidator to add metrics collection.
 func (h *DynamoGraphDeploymentHandler) RegisterWithManager(mgr manager.Manager) error {
 	h.registerWithManager(
 		mgr,
@@ -221,10 +219,7 @@ func (h *DynamoGraphDeploymentHandler) registerWithManager(
 	path string,
 	validator admission.CustomValidator,
 ) {
-	// Wrap the handler with lease-aware logic for cluster-wide coordination
 	leaseAwareValidator := internalwebhook.NewLeaseAwareValidator(validator, internalwebhook.GetExcludedNamespaces())
-
-	// Wrap with metrics collection
 	observedValidator := observability.NewObservedValidator(leaseAwareValidator, consts.ResourceTypeDynamoGraphDeployment)
 
 	webhook := admission.

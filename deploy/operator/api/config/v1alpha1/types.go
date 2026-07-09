@@ -152,20 +152,24 @@ type LeaderElectionConfiguration struct {
 
 // NamespaceConfiguration determines operator namespace mode.
 type NamespaceConfiguration struct {
-	// Deprecated: Namespace-restricted mode is deprecated and will be removed in a future release.
-	// Use cluster-wide mode (leave Restricted empty) instead.
+	// Restricted enables development/test-only namespace-restricted reconciliation.
+	// Namespace-restricted mode is not supported for production.
 	Restricted string `json:"restricted"`
-	// Deprecated: Scope is only used in namespace-restricted mode, which is deprecated.
+	// RunNamespacedValidation makes a namespace-restricted operator serve validating
+	// admission webhooks for its namespace. It does not take ownership of defaulting,
+	// mutation, conversion, or CRDs, which remain cluster-wide responsibilities.
+	// +kubebuilder:default=false
+	RunNamespacedValidation bool `json:"runNamespacedValidation"`
+	// Scope configures the reconciliation ownership claim used in namespace-restricted mode.
 	Scope NamespaceScopeConfiguration `json:"scope"`
 }
 
-// Deprecated: NamespaceScopeConfiguration is used only by the deprecated namespace-restricted
-// mode and will be removed in a future release.
+// NamespaceScopeConfiguration configures development/test-only namespace ownership.
 type NamespaceScopeConfiguration struct {
-	// LeaseDuration is the duration of namespace scope marker lease before expiration
+	// LeaseDuration is the duration of the reconciliation ownership lease before expiration.
 	// +kubebuilder:default="30s"
 	LeaseDuration metav1.Duration `json:"leaseDuration"`
-	// LeaseRenewInterval is the interval for renewing namespace scope marker lease
+	// LeaseRenewInterval is the interval for renewing the reconciliation ownership lease.
 	// +kubebuilder:default="10s"
 	LeaseRenewInterval metav1.Duration `json:"leaseRenewInterval"`
 }

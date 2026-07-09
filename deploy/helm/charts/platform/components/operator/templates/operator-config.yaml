@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- $webhookEnabled := or (not .Values.namespaceRestriction.enabled) .Values.namespaceRestriction.runNamespacedValidation }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,10 +28,12 @@ data:
       metrics:
         bindAddress: "0.0.0.0"
         secure: true
+      {{- if $webhookEnabled }}
       webhook:
         certProvisionMode: {{ if or .Values.webhook.certManager.enabled .Values.webhook.certificateSecret.external }}"manual"{{ else }}"auto"{{ end }}
         secretName: {{ .Values.webhook.certificateSecret.name | quote }}
         serviceName: {{ include "dynamo-operator.fullname" . }}-webhook-service
+      {{- end }}
     leaderElection:
       enabled: true
       id: {{ default "dynamo.nvidia.com" .Values.controllerManager.leaderElection.id | quote }}
@@ -42,6 +45,9 @@ data:
     {{- if .Values.namespaceRestriction.enabled }}
     namespace:
       restricted: {{ default .Release.Namespace .Values.namespaceRestriction.targetNamespace | quote }}
+      {{- if .Values.namespaceRestriction.runNamespacedValidation }}
+      runNamespacedValidation: true
+      {{- end }}
       {{- if .Values.namespaceRestriction.lease }}
       {{- if or (ne (.Values.namespaceRestriction.lease.duration | toString) "30s") (ne (.Values.namespaceRestriction.lease.renewInterval | toString) "10s") }}
       scope:

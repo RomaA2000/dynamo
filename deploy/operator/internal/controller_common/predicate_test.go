@@ -18,10 +18,37 @@
 package controller_common
 
 import (
+	"context"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+type excludedNamespaces map[string]bool
+
+func (e excludedNamespaces) Contains(namespace string) bool {
+	return e[namespace]
+}
+
+func TestIsNamespaceExcluded(t *testing.T) {
+	runtimeConfig := &RuntimeConfig{ExcludedNamespaces: excludedNamespaces{"tenant-a": true}}
+
+	if !IsNamespaceExcluded(runtimeConfig, "tenant-a") {
+		t.Fatal("expected tenant-a to be excluded")
+	}
+	if IsNamespaceExcluded(runtimeConfig, "tenant-b") {
+		t.Fatal("expected tenant-b not to be excluded")
+	}
+	if IsNamespaceExcluded(nil, "tenant-a") {
+		t.Fatal("expected a nil runtime configuration not to exclude namespaces")
+	}
+	if IsNamespaceExcluded(runtimeConfig, "") {
+		t.Fatal("expected cluster-scoped requests not to be excluded")
+	}
+	if !ShouldSkipReconciliation(context.Background(), runtimeConfig, "tenant-a") {
+		t.Fatal("expected reconciliation in tenant-a to be skipped")
+	}
+}
 
 func TestAPIGroupServesVersion(t *testing.T) {
 	apiGroups := &metav1.APIGroupList{
