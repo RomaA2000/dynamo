@@ -74,6 +74,18 @@ struct WorkerUsage {
     decayed: usize,
 }
 
+impl WorkerUsage {
+    fn add_program(&mut self, normal: usize, decayed: usize, buffer: usize) {
+        self.used = self.used.saturating_add(normal).saturating_add(buffer);
+        self.decayed = self.decayed.saturating_add(decayed).saturating_add(buffer);
+    }
+
+    fn remove_program(&mut self, normal: usize, decayed: usize, buffer: usize) {
+        self.used = self.used.saturating_sub(normal).saturating_sub(buffer);
+        self.decayed = self.decayed.saturating_sub(decayed).saturating_sub(buffer);
+    }
+}
+
 pub struct ThunderAgent<P> {
     capacity: P,
     config: ThunderAgentConfig,
@@ -116,11 +128,15 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
         };
 
         let now = Instant::now();
-        let session_id = session_id.to_owned();
+        let id = request.id();
+        let session_is_busy = self
+            .sessions
+            .get(session_id)
+            .is_some_and(|requests| requests.current.is_some());
         self.requests.insert(
-            request.id(),
+            id,
             RequestState {
-                session_id: session_id.clone(),
+                session_id: session_id.to_owned(),
                 session_final: request.session_final(),
                 context_tokens: request.context_tokens(),
                 worker_eligibility: request.worker_eligibility().clone(),
@@ -128,20 +144,16 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
                 prior: None,
             },
         );
-        if self
-            .sessions
-            .get(&session_id)
-            .is_some_and(|requests| requests.current.is_some())
-        {
+        if session_is_busy {
             self.sessions
-                .entry(session_id)
-                .or_default()
+                .get_mut(session_id)
+                .expect("busy session must exist")
                 .waiting
-                .insert(request.id());
+                .insert(id);
             return AdmissionDecision::Defer;
         }
 
-        self.begin_request(request.id(), &session_id, now)
+        self.begin_request(id, session_id, now)
     }
 
     fn begin_request(
@@ -170,19 +182,36 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
             return AdmissionDecision::Defer;
         };
         request.prior = prior;
-        self.sessions
-            .entry(session_id.to_owned())
-            .or_default()
-            .current = Some(id);
-        let program = self.programs.entry(session_id.to_owned()).or_default();
-        program.step_count = program.step_count.saturating_add(1);
-        if context_tokens > 0 {
-            program.token_total = context_tokens;
+        if let Some(requests) = self.sessions.get_mut(session_id) {
+            requests.current = Some(id);
+        } else {
+            self.sessions.insert(
+                session_id.to_owned(),
+                SessionRequests {
+                    current: Some(id),
+                    ..Default::default()
+                },
+            );
         }
-        program.status = ProgramStatus::Reasoning;
-        program.acting_since = None;
-        let lifecycle = program.lifecycle;
-        let assigned_worker = program.assigned_worker;
+        let (lifecycle, assigned_worker) = if let Some(program) = self.programs.get_mut(session_id)
+        {
+            program.step_count = program.step_count.saturating_add(1);
+            if context_tokens > 0 {
+                program.token_total = context_tokens;
+            }
+            program.status = ProgramStatus::Reasoning;
+            program.acting_since = None;
+            (program.lifecycle, program.assigned_worker)
+        } else {
+            let program = Program {
+                step_count: 1,
+                token_total: context_tokens,
+                ..Default::default()
+            };
+            let state = (program.lifecycle, program.assigned_worker);
+            self.programs.insert(session_id.to_owned(), program);
+            state
+        };
 
         if lifecycle == ProgramLifecycle::Paused {
             self.defer_request(session_id, id, now, false);
@@ -486,14 +515,11 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
                 && let Some(worker) = program.assigned_worker
             {
                 let worker_usage = usage.entry(worker).or_default();
-                worker_usage.used = worker_usage
-                    .used
-                    .saturating_add(self.program_tokens(program, false, now))
-                    .saturating_add(self.config.buffer_per_program);
-                worker_usage.decayed = worker_usage
-                    .decayed
-                    .saturating_add(self.program_tokens(program, true, now))
-                    .saturating_add(self.config.buffer_per_program);
+                worker_usage.add_program(
+                    self.program_tokens(program, false, now),
+                    self.program_tokens(program, true, now),
+                    self.config.buffer_per_program,
+                );
             }
         }
         usage
@@ -588,14 +614,11 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
             resumed += 1;
             let program = &self.programs[&session_id];
             let worker_usage = usage.entry(worker).or_default();
-            worker_usage.used = worker_usage
-                .used
-                .saturating_add(self.program_tokens(program, false, now))
-                .saturating_add(self.config.buffer_per_program);
-            worker_usage.decayed = worker_usage
-                .decayed
-                .saturating_add(self.program_tokens(program, true, now))
-                .saturating_add(self.config.buffer_per_program);
+            worker_usage.add_program(
+                self.program_tokens(program, false, now),
+                self.program_tokens(program, true, now),
+                self.config.buffer_per_program,
+            );
             let updated = remaining - required;
             if updated > self.config.buffer_per_program {
                 backend_caps[position] = (worker, updated);
@@ -655,14 +678,11 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
             if let Some(worker) = target {
                 let program = &self.programs[&session_id];
                 let worker_usage = usage.entry(worker).or_default();
-                worker_usage.used = worker_usage
-                    .used
-                    .saturating_add(self.program_tokens(program, false, now))
-                    .saturating_add(self.config.buffer_per_program);
-                worker_usage.decayed = worker_usage
-                    .decayed
-                    .saturating_add(self.program_tokens(program, true, now))
-                    .saturating_add(self.config.buffer_per_program);
+                worker_usage.add_program(
+                    self.program_tokens(program, false, now),
+                    self.program_tokens(program, true, now),
+                    self.config.buffer_per_program,
+                );
             }
         }
         (actions, resumed)
@@ -716,17 +736,12 @@ impl<P: WorkerCapacityProvider> ThunderAgent<P> {
                     let Some(program) = self.programs.get(session_id) else {
                         continue;
                     };
-                    let used = self
-                        .program_tokens(program, false, now)
-                        .saturating_add(self.config.buffer_per_program);
-                    let decayed = self
-                        .program_tokens(program, true, now)
-                        .saturating_add(self.config.buffer_per_program);
+                    let used = self.program_tokens(program, false, now);
+                    let decayed = self.program_tokens(program, true, now);
                     self.pause_acting(session_id);
                     paused += 1;
                     let worker_usage = usage.entry(capacity.worker).or_default();
-                    worker_usage.used = worker_usage.used.saturating_sub(used);
-                    worker_usage.decayed = worker_usage.decayed.saturating_sub(decayed);
+                    worker_usage.remove_program(used, decayed, self.config.buffer_per_program);
                 }
             }
             if usage.get(&capacity.worker).map_or(0, |usage| usage.used) > target
@@ -1225,6 +1240,30 @@ mod tests {
             context_tokens: 1,
         });
         assert!(!strategy.programs.contains_key("a"));
+    }
+
+    #[test]
+    fn aborted_session_final_keeps_program_released() {
+        let mut strategy =
+            ThunderAgent::new(|| capacities(&[(1, 1_000)]), Default::default()).unwrap();
+        strategy.admit(request(1, Some("a"), 100));
+        strategy.on_event(AdmissionEvent::Dispatched {
+            id: AdmissionId::new(1),
+            worker: worker(1),
+        });
+        strategy.on_event(AdmissionEvent::Completed {
+            id: AdmissionId::new(1),
+            context_tokens: 140,
+        });
+
+        strategy.admit(final_request(2, Some("a"), 1));
+        strategy.on_event(AdmissionEvent::Aborted {
+            id: AdmissionId::new(2),
+        });
+
+        assert!(!strategy.programs.contains_key("a"));
+        assert!(!strategy.paused.contains("a"));
+        assert!(!strategy.sessions.contains_key("a"));
     }
 
     #[test]

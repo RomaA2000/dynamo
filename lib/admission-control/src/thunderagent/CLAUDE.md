@@ -29,6 +29,7 @@ AdmissionRequest
   -> no session_id: Bypass
   -> another request for the session is current: Defer as a session waiter
   -> begin request
+       -> session-final: release program accounting and route the terminal request normally
        -> update logical context and mark Reasoning
        -> paused session: Defer
        -> valid sticky worker available: Ready(Exact)
@@ -48,7 +49,7 @@ Worker eligibility is live. A deferred request retains `WorkerEligibility` and t
 
 ## Logical capacity accounting
 
-Capacity is `total_kv_blocks * block_size + native_offloading_capacity_tokens` for each worker/rank. Missing or zero device capacity disables ThunderAgent capacity gating for that worker set.
+Capacity is `total_kv_blocks * block_size + native_offloading_capacity_tokens` for each worker/rank. Workers with missing or zero device capacity are excluded from ThunderAgent capacity gating, with a one-time warning. If no worker reports usable metadata, capacity gating is disabled and requests continue through normal router selection.
 
 Only active programs with an assigned worker contribute usage:
 
@@ -111,18 +112,19 @@ When a worker exceeds `pause_threshold * capacity`, ThunderAgent pauses the smal
 - Placement never widens the request's router-owned eligibility.
 - Temporary overload does not silently migrate a sticky session.
 - A request is released at most once.
-- Abort restores the exact program state that existed before admission.
+- Abort restores the exact program state that existed before admission for non-final requests. Session-final is intentionally destructive at admission time and remains released if its terminal request aborts.
 - Paused requests remain owned and accounted for by the KV-router queue, not this module.
 
 ## Deliberately absent
 
 - Live indexer/cache residency queries.
-- Session-final cleanup.
 - In-flight decode preemption or migration.
 - Soft KV demotion, prefetch, or retention actions.
 - Separate plug-ins for accounting, pressure, victim selection, packing, decay, or placement.
 
 Add these only when an algorithm requiring them is being implemented and measured.
+
+Session-final assumes the terminal request is small. That premise is not enforced, so its KV usage is not included after program accounting is released.
 
 ## Validation
 

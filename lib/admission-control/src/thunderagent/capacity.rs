@@ -30,6 +30,7 @@ pub struct WatchWorkerCapacity<C> {
     workers: watch::Receiver<HashMap<WorkerId, C>>,
     block_size: u32,
     cached: Option<Arc<[WorkerCapacity]>>,
+    warned_missing_capacity: bool,
 }
 
 impl<C> WatchWorkerCapacity<C> {
@@ -38,6 +39,7 @@ impl<C> WatchWorkerCapacity<C> {
             workers,
             block_size,
             cached: None,
+            warned_missing_capacity: false,
         }
     }
 }
@@ -55,11 +57,14 @@ where
 
         let workers = self.workers.borrow_and_update();
         let mut capacities = Vec::new();
+        let mut missing_capacity_workers = 0;
         for (&worker_id, config) in workers.iter() {
             let Some(blocks) = config.total_kv_blocks() else {
+                missing_capacity_workers += 1;
                 continue;
             };
             if blocks == 0 {
+                missing_capacity_workers += 1;
                 continue;
             }
             let tokens = blocks
@@ -72,6 +77,14 @@ where
                 worker: WorkerWithDpRank::new(worker_id, dp_rank),
                 tokens,
             }));
+        }
+        if missing_capacity_workers > 0 && !self.warned_missing_capacity {
+            tracing::warn!(
+                worker_count = workers.len(),
+                missing_capacity_workers,
+                "ThunderAgent capacity gating excludes workers without usable KV capacity"
+            );
+            self.warned_missing_capacity = true;
         }
         capacities.sort_unstable_by_key(|capacity| capacity.worker);
         let capacities = Arc::from(capacities);
@@ -170,5 +183,6 @@ mod tests {
         let (_tx, rx) = watch::channel(HashMap::from([(11, ZeroConfig)]));
         let mut provider = WatchWorkerCapacity::new(rx, 16);
         assert!(provider.snapshot().is_empty());
+        assert!(provider.warned_missing_capacity);
     }
 }
